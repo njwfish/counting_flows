@@ -19,6 +19,7 @@ def reverse_sampler(
     time_schedule="uniform",
     use_mean=False,
     device="cuda",
+    return_trajectory=False,
     **schedule_kwargs
 ):
     """
@@ -35,24 +36,26 @@ def reverse_sampler(
         time_schedule: Time spacing ("uniform", "early_dense", etc.)
         use_mean: Whether to use mean predictions instead of sampling
         device: Device for computation
+        return_trajectory: Whether to return intermediate steps (for visualization)
         **schedule_kwargs: Additional parameters for schedules
     
     Returns:
         x0: Generated samples at time t=0
+        trajectory: List of intermediate x values (if return_trajectory=True)
     """
     x = x1.clone().to(device).float()
+    
+    # Initialize trajectory storage if requested
+    if return_trajectory:
+        trajectory = [x.clone().cpu()]
     
     # Create schedules
     if mode == "nb":
         r_sched = make_r_schedule(K, r_min, r_max, r_schedule, **schedule_kwargs).to(device)
     
-    # Get time points (can be non-uniform)
-    if time_schedule == "uniform":
-        time_points = torch.linspace(1.0, 0.0, K+1).to(device)  # Reverse order
-        dt = 1.0 / K
-    else:
-        time_points = make_time_spacing_schedule(K, time_schedule, **schedule_kwargs).to(device)
-        time_points = torch.flip(time_points, [0])  # Reverse for backward process
+    # Get time points (always use make_time_spacing_schedule)
+    time_points = make_time_spacing_schedule(K, time_schedule, **schedule_kwargs).to(device)
+    time_points = torch.flip(time_points, [0])  # Reverse for backward process
     
     for step in range(K):
         t_current = time_points[step]
@@ -79,11 +82,8 @@ def reverse_sampler(
             beta = max(r_k * dt_step.item(), 1e-6)  # Step size
             p_step = Beta(alpha, beta).sample(n.shape).clamp(0., 0.999).to(device)
         else:  # Poisson
-            if time_schedule == "uniform":
-                p_step = torch.full_like(x, dt).clamp(0., 0.999)
-            else:
-                dt_step = t_current - t_next
-                p_step = torch.full_like(x, dt_step / t_current).clamp(0., 0.999)
+            dt_step = t_current - t_next
+            p_step = torch.full_like(x, dt_step / t_current).clamp(0., 0.999)
         
         # Sample decrements only where n > 0
         krem = torch.zeros_like(n).float().to(device)
@@ -97,5 +97,12 @@ def reverse_sampler(
         
         # Apply step
         x = x - sgn * krem
+        
+        # Store trajectory step if requested
+        if return_trajectory:
+            trajectory.append(x.clone().cpu())
     
-    return x.long() 
+    if return_trajectory:
+        return x.long(), trajectory
+    else:
+        return x.long() 

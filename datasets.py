@@ -20,31 +20,68 @@ from abc import ABC, abstractmethod
 class BaseCountDataset(Dataset, ABC):
     """Base class for count flow datasets"""
     
-    def __init__(self, size, d, fixed_base=False):
+    def __init__(self, size, d, fixed_base=False, batch_size=None, homogeneous=False):
         """
         Args:
             size: Dataset size (number of samples per epoch)
             d: Dimensionality of count vectors
             fixed_base: If True, use fixed base measure; if False, sample randomly
+            batch_size: If provided, __getitem__ returns batches of this size
+            homogeneous: If True, all samples in batch share same parameters
         """
         self.size = size
         self.d = d
         self.fixed_base = fixed_base
+        self.batch_size = batch_size
+        self.homogeneous = homogeneous
         
         # Generate fixed base measure if needed
         if self.fixed_base:
             self.base_params = self._generate_fixed_base()
     
     def __len__(self):
+        if self.batch_size is not None:
+            return self.size // self.batch_size
         return self.size
     
     def __getitem__(self, idx):
-        """Generate endpoint pair"""
-        x0, x1, z = self._generate_endpoints()
+        """Generate endpoint pair or batch"""
+        if self.batch_size is not None:
+            return self._generate_batch(self.batch_size, self.homogeneous)
+        else:
+            x0, x1, z = self._generate_endpoints()
+            return {
+                'x0': x0.long(),
+                'x1': x1.long(),
+                'z': z.float()
+            }
+    
+    def _generate_batch(self, batch_size, homogeneous=False):
+        """Generate a batch of endpoint pairs"""
+        if homogeneous:
+            # Generate one set of parameters and repeat for the batch
+            x0_single, x1_single, z_single = self._generate_endpoints()
+            
+            x0_batch = x0_single.unsqueeze(0).repeat(batch_size, 1)
+            x1_batch = x1_single.unsqueeze(0).repeat(batch_size, 1)
+            z_batch = z_single.unsqueeze(0).repeat(batch_size, 1)
+        else:
+            # Generate different parameters for each sample
+            x0_list, x1_list, z_list = [], [], []
+            for _ in range(batch_size):
+                x0, x1, z = self._generate_endpoints()
+                x0_list.append(x0)
+                x1_list.append(x1)
+                z_list.append(z)
+            
+            x0_batch = torch.stack(x0_list)
+            x1_batch = torch.stack(x1_list)
+            z_batch = torch.stack(z_list)
+        
         return {
-            'x0': x0.long(),
-            'x1': x1.long(),
-            'z': z.float()
+            'x0': x0_batch.long(),
+            'x1': x1_batch.long(),
+            'z': z_batch.float()
         }
     
     @abstractmethod
@@ -71,10 +108,11 @@ class PoissonDataset(BaseCountDataset):
     - If fixed_base=False: Both λ₀ and λ₁ are random
     """
     
-    def __init__(self, size, d, lam_scale=50.0, fixed_base=False, fixed_lam=10.0):
+    def __init__(self, size, d, lam_scale=50.0, fixed_base=False, fixed_lam=10.0, 
+                 batch_size=None, homogeneous=False):
         self.lam_scale = lam_scale
         self.fixed_lam = fixed_lam
-        super().__init__(size, d, fixed_base)
+        super().__init__(size, d, fixed_base, batch_size, homogeneous)
         
     def _generate_fixed_base(self):
         """Generate fixed λ₀ for all samples"""
@@ -83,8 +121,8 @@ class PoissonDataset(BaseCountDataset):
     def _generate_endpoints(self):
         if self.fixed_base:
             # Fixed λ₀, random λ₁
-            lam1 = self.base_params
-            lam0 = self.lam_scale * torch.rand(self.d)
+            lam0 = self.base_params
+            lam1 = self.lam_scale * torch.rand(self.d)
         else:
             # Both random
             lam0 = self.lam_scale * torch.rand(self.d)
@@ -114,14 +152,15 @@ class BetaBinomialDataset(BaseCountDataset):
     """
     
     def __init__(self, size, d, n_scale=50, alpha_range=(0.1, 2.0), beta_range=(0.1, 2.0), 
-                 fixed_base=False, fixed_n=50, fixed_alpha=0.5, fixed_beta=0.5):
+                 fixed_base=False, fixed_n=50, fixed_alpha=0.5, fixed_beta=0.5,
+                 batch_size=None, homogeneous=False):
         self.n_scale = n_scale
         self.alpha_range = alpha_range
         self.beta_range = beta_range
         self.fixed_n = fixed_n
         self.fixed_alpha = fixed_alpha
         self.fixed_beta = fixed_beta
-        super().__init__(size, d, fixed_base)
+        super().__init__(size, d, fixed_base, batch_size, homogeneous)
     
     def _generate_fixed_base(self):
         """Generate fixed (n₀, α₀, β₀) for all samples"""
@@ -183,25 +222,16 @@ class PoissonBridgeCollate:
             **schedule_kwargs: Additional schedule parameters
         """
         self.n_steps = n_steps
-        self.time_schedule = time_schedule
-        self.schedule_kwargs = schedule_kwargs
         
-        # Pre-compute time points if using non-uniform spacing
-        if time_schedule != "uniform":
-            self.time_points = make_time_spacing_schedule(n_steps, time_schedule, **schedule_kwargs)
-        else:
-            self.time_points = None
+        # Always use make_time_spacing_schedule (handles uniform too)
+        self.time_points = make_time_spacing_schedule(n_steps, time_schedule, **schedule_kwargs)
     
     def _sample_time(self):
-        """Sample time point according to schedule"""
-        if self.time_schedule == "uniform":
-            t_idx = torch.randint(1, self.n_steps-1, (1,)).item()
-            t = t_idx / self.n_steps
-        else:
-            # Sample from non-uniform time points (excluding endpoints)
-            valid_idx = torch.randint(1, len(self.time_points)-1, (1,)).item()
-            t = self.time_points[valid_idx].item()
-            t_idx = int(t * self.n_steps)
+        """Sample time point from pre-computed schedule"""
+        # Sample from valid time points (excluding endpoints)
+        valid_idx = torch.randint(1, len(self.time_points) - 1, (1,)).item()
+        t = self.time_points[valid_idx].item()
+        t_idx = valid_idx  # Use the actual index in the schedule
         return t, t_idx
     
     def __call__(self, batch):
@@ -211,6 +241,9 @@ class PoissonBridgeCollate:
         x1_batch = torch.stack([item['x1'] for item in batch]) 
         z_batch = torch.stack([item['z'] for item in batch])
         
+        # Get device from input tensors
+        device = x0_batch.device
+        
         # Sample time for each item in batch
         t_list = []
         t_idx_list = []
@@ -219,11 +252,11 @@ class PoissonBridgeCollate:
             t_list.append(t)
             t_idx_list.append(t_idx)
         
-        t_batch = torch.tensor(t_list, dtype=torch.float32)
+        t_batch = torch.tensor(t_list, dtype=torch.float32, device=device)
         
         # Batch Poisson bridge sampling
         n = (x1_batch - x0_batch).abs().long()
-        k = Binomial(total_count=n, probs=t_batch.unsqueeze(-1)).sample()
+        k = Binomial(total_count=n, probs=t_batch.unsqueeze(-1)).sample().to(device)
         x_t_batch = x0_batch + torch.sign(x1_batch - x0_batch) * k
         
         return {
@@ -250,28 +283,19 @@ class NBBridgeCollate:
             **schedule_kwargs: Additional schedule parameters
         """
         self.n_steps = n_steps
-        self.time_schedule = time_schedule
-        self.schedule_kwargs = schedule_kwargs
         
         # Create r(t) schedule
         self.r_sched = make_r_schedule(n_steps, r_min, r_max, r_schedule, **schedule_kwargs)
         
-        # Pre-compute time points if using non-uniform spacing
-        if time_schedule != "uniform":
-            self.time_points = make_time_spacing_schedule(n_steps, time_schedule, **schedule_kwargs)
-        else:
-            self.time_points = None
+        # Always use make_time_spacing_schedule (handles uniform too)
+        self.time_points = make_time_spacing_schedule(n_steps, time_schedule, **schedule_kwargs)
     
     def _sample_time(self):
-        """Sample time point according to schedule"""
-        if self.time_schedule == "uniform":
-            t_idx = torch.randint(1, self.n_steps-1, (1,)).item()
-            t = t_idx / self.n_steps
-        else:
-            # Sample from non-uniform time points (excluding endpoints)
-            valid_idx = torch.randint(1, len(self.time_points)-1, (1,)).item()
-            t = self.time_points[valid_idx].item()
-            t_idx = int(t * self.n_steps)
+        """Sample time point from pre-computed schedule"""
+        # Sample from valid time points (excluding endpoints)
+        valid_idx = torch.randint(1, len(self.time_points) - 1, (1,)).item()
+        t = self.time_points[valid_idx].item()
+        t_idx = valid_idx  # Use the actual index in the schedule
         return t, t_idx
     
     def __call__(self, batch):
@@ -281,6 +305,9 @@ class NBBridgeCollate:
         x1_batch = torch.stack([item['x1'] for item in batch]) 
         z_batch = torch.stack([item['z'] for item in batch])
         
+        # Get device from input tensors
+        device = x0_batch.device
+        
         # Sample time for each item in batch
         t_list = []
         t_idx_list = []
@@ -289,11 +316,11 @@ class NBBridgeCollate:
             t_list.append(t)
             t_idx_list.append(t_idx)
         
-        t_batch = torch.tensor(t_list, dtype=torch.float32)
+        t_batch = torch.tensor(t_list, dtype=torch.float32, device=device)
         
         # Get r(t) values for each sample in batch
         r_t_batch = torch.tensor([self.r_sched[t_idx].item() for t_idx in t_idx_list], 
-                                dtype=torch.float32)
+                                dtype=torch.float32, device=device)
         
         # Batch Beta-Binomial bridge sampling
         n = (x1_batch - x0_batch).abs().long()
@@ -303,10 +330,10 @@ class NBBridgeCollate:
         beta = torch.clamp(r_t_batch.unsqueeze(-1) * (1 - t_batch.unsqueeze(-1)), min=1e-3)
         
         # Sample p from Beta distribution
-        p = Beta(alpha, beta).sample().clamp(1e-6, 1-1e-6)
+        p = Beta(alpha, beta).sample().clamp(1e-6, 1-1e-6).to(device)
         
         # Sample k from Binomial
-        k = Binomial(total_count=n, probs=p).sample()
+        k = Binomial(total_count=n, probs=p).sample().to(device)
         x_t_batch = x0_batch + torch.sign(x1_batch - x0_batch) * k
         
         return {

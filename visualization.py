@@ -7,13 +7,12 @@ Provides comprehensive plotting and debugging visualization for count flows.
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
-from torch.distributions import Binomial, Beta
-from .scheduling import make_time_schedule, make_time_spacing_schedule
-from .models import NBPosterior, BetaBinomialPosterior, ZeroInflatedPoissonPosterior
+from .scheduling import make_time_spacing_schedule, make_r_schedule
+from .samplers import reverse_sampler
 
 
 def plot_schedule_comparison(K=50, title="Schedule Comparison"):
-    """Visualize different schedule types"""
+    """Visualize different r(t) schedule types"""
     fig, axes = plt.subplots(2, 3, figsize=(15, 10))
     fig.suptitle(title)
     
@@ -33,13 +32,11 @@ def plot_schedule_comparison(K=50, title="Schedule Comparison"):
             elif schedule_type == "sigmoid":
                 kwargs = {'steepness': 10.0, 'midpoint': 0.5}
             
-            times, weights = make_time_schedule(
-                K, schedule_type=schedule_type, 
-                start_val=20.0, end_val=1.0, 
-                **kwargs
-            )
+            r_sched = make_r_schedule(K, r_min=1.0, r_max=20.0, 
+                                    r_schedule=schedule_type, **kwargs)
+            times = torch.linspace(0, 1, K)
             
-            ax.plot(times.numpy(), weights.numpy(), linewidth=2, label=schedule_type)
+            ax.plot(times.numpy(), r_sched.numpy(), linewidth=2, label=schedule_type)
             ax.set_title(f'{schedule_type.title()} Schedule')
             ax.set_xlabel('Time t')
             ax.set_ylabel('r(t) value')
@@ -94,97 +91,70 @@ def plot_time_spacing_comparison(K=50, title="Time Spacing Comparison"):
     return fig
 
 
-def plot_bridge_dynamics(sampler, B=1000, d=4, n_steps=30, title="Bridge Dynamics"):
-    """Visualize how the bridge evolves over time"""
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-    fig.suptitle(title)
-    
-    # Collect data at different time points
-    time_points = [0.2, 0.4, 0.6, 0.8]
-    all_data = {t: [] for t in time_points}
-    
-    for _ in range(10):  # Multiple samples for statistics
-        x0, x1, x_t, ts, z, r = sampler(B, d, n_steps)
-        
-        for i, target_t in enumerate(time_points):
-            # Find samples close to this time point
-            mask = torch.abs(ts.squeeze() - target_t) < 0.05
-            if mask.sum() > 0:
-                all_data[target_t].append(x_t[mask].numpy())
-    
-    for i, t in enumerate(time_points):
-        ax = axes[i//2, i%2]
-        if all_data[t]:
-            data = np.concatenate(all_data[t], axis=0)
-            ax.hist(data[:, 0], bins=30, alpha=0.7, density=True, label=f't={t}')
-            ax.set_title(f'x_t distribution at t={t}')
-            ax.set_xlabel('Count value')
-            ax.set_ylabel('Density')
-    
-    plt.tight_layout()
-    return fig
-
-
-def plot_reverse_trajectory(x1, z, model, K=30, mode="poisson", device="cuda", n_trajectories=5):
+def plot_reverse_trajectory(x1, z, model, K=30, mode="poisson", device="cuda", n_trajectories=5, 
+                           r_min=1.0, r_max=20.0, r_schedule="linear", time_schedule="uniform", **schedule_kwargs):
     """Plot the reverse sampling trajectory"""
     fig, axes = plt.subplots(2, 2, figsize=(12, 8))
     fig.suptitle(f"Reverse Sampling Trajectories ({mode} bridge)")
     
+    # Get the time schedule used in sampling
+    time_points = make_time_spacing_schedule(K, time_schedule, **schedule_kwargs)
+    time_points = torch.flip(time_points, [0])  # Reverse for backward process
+    
     trajectories = []
     
     for traj in range(n_trajectories):
-        x = x1[:1].clone().to(device).float()  # Single sample
-        dt = 1.0 / K
+        # Use the actual reverse sampler to get full trajectory
+        x_start = x1[:1].clone().to(device)  # Single sample
+        z_start = z[:1].clone().to(device)
         
-        traj_data = [x.cpu().numpy().copy()]
+        # Get the full reverse trajectory with intermediate steps
+        x_final, trajectory = reverse_sampler(
+            x_start, z_start, model,
+            K=K, mode=mode, device=device,
+            r_min=r_min, r_max=r_max,
+            r_schedule=r_schedule, time_schedule=time_schedule,
+            return_trajectory=True,
+            **schedule_kwargs
+        )
         
-        for k in range(K, 0, -1):
-            t = torch.full_like(x[:, :1], k * dt)
-            x0_hat = model.sample(x, z[:1], t, use_mean=False).float()
-            
-            delta = x - x0_hat
-            n = delta.abs().clamp_max(1e6).long()
-            sgn = torch.sign(delta)
-            
-            if mode == "nb":
-                r_k = 1.0  # Simplified for visualization
-                alpha = max(r_k * (k-1) * dt, 1e-6)
-                beta = max(r_k * dt, 1e-6)
-                p_step = Beta(alpha, beta).sample(n.shape).clamp(0., 0.999).to(device)
-            else:
-                p_step = torch.full_like(x, dt).clamp(0., 0.999)
-            
-            krem = torch.zeros_like(n).float().to(device)
-            mask = n > 0
-            
-            if mask.any():
-                krem[mask] = Binomial(
-                    total_count=n[mask],
-                    probs=p_step[mask]
-                ).sample()
-            
-            x = x - sgn * krem
-            traj_data.append(x.cpu().numpy().copy())
+        # Convert trajectory to numpy array for plotting
+        # trajectory is a list of tensors, each of shape [1, d]
+        traj_array = np.array([step[0].numpy() for step in trajectory])  # Shape: [K+1, d]
         
-        trajectories.append(np.array(traj_data))
+        trajectories.append(traj_array)
+    
+    # Convert time points to numpy for plotting
+    time_np = time_points.numpy()
     
     # Plot trajectories for each dimension
     for dim in range(min(4, x1.shape[1])):
         ax = axes[dim//2, dim%2]
+        
+        # Plot linear interpolant reference (dotted black line)
+        x1_val = x1[0, dim].cpu().numpy()
+        x0_mean = np.mean([traj[-1, dim] for traj in trajectories])  # Average final point
+        linear_interp = np.linspace(x1_val, x0_mean, len(time_np))
+        ax.plot(time_np, linear_interp, 'k--', alpha=0.5, linewidth=2, label='Linear interpolant')
+        
+        # Plot actual trajectories
         for traj in trajectories:
-            steps = np.arange(len(traj))
-            ax.plot(steps, traj[:, 0, dim], alpha=0.7, linewidth=2)
+            ax.plot(time_np, traj[:, dim], 'o-', alpha=0.7, linewidth=2, markersize=4)
         
         ax.set_title(f'Dimension {dim}')
-        ax.set_xlabel('Reverse step')
+        ax.set_xlabel('Time t')
         ax.set_ylabel('Count value')
         ax.grid(True, alpha=0.3)
+        ax.legend()
+        
+        # Invert x-axis since we're going backwards in time (t=1 → t=0)
+        ax.invert_xaxis()
     
     plt.tight_layout()
     return fig
 
 
-def plot_generation_analysis(x0_samples, lam0_batch, lam1_batch, title="Generation Analysis"):
+def plot_generation_analysis(x0_samples, x0_target, x1_batch, title="Generation Analysis"):
     """Analyze the quality of generated samples"""
     fig, axes = plt.subplots(2, 3, figsize=(15, 10))
     fig.suptitle(title)
@@ -196,13 +166,10 @@ def plot_generation_analysis(x0_samples, lam0_batch, lam1_batch, title="Generati
         ax = axes[0, dim]
         
         samples = x0_samples[:, dim].cpu().numpy()
-        target_lambda = lam0_batch[0, dim].cpu().numpy()
-        
-        # Generate theoretical Poisson samples for comparison
-        theoretical = np.random.poisson(target_lambda, len(samples))
+        targets = x0_target[:, dim].cpu().numpy()
         
         ax.hist(samples, bins=30, alpha=0.7, density=True, label='Generated', color='blue')
-        ax.hist(theoretical, bins=30, alpha=0.5, density=True, label=f'Poisson(λ={target_lambda:.2f})', color='red')
+        ax.hist(targets, bins=30, alpha=0.5, density=True, label='Target', color='red')
         
         ax.set_title(f'Dimension {dim}')
         ax.set_xlabel('Count value')
@@ -212,12 +179,12 @@ def plot_generation_analysis(x0_samples, lam0_batch, lam1_batch, title="Generati
     # Sample statistics comparison
     ax = axes[0, 2]
     sample_means = x0_samples.float().mean(0).cpu().numpy()
-    target_means = lam0_batch[0].cpu().numpy()
+    target_means = x0_target.float().mean(0).cpu().numpy()
     
     dims = np.arange(len(sample_means))
     width = 0.35
     ax.bar(dims - width/2, sample_means, width, label='Generated mean', alpha=0.7)
-    ax.bar(dims + width/2, target_means, width, label='Target λ₀', alpha=0.7)
+    ax.bar(dims + width/2, target_means, width, label='Target mean', alpha=0.7)
     ax.set_xlabel('Dimension')
     ax.set_ylabel('Mean count')
     ax.set_title('Mean Comparison')
@@ -226,10 +193,10 @@ def plot_generation_analysis(x0_samples, lam0_batch, lam1_batch, title="Generati
     # Variance comparison
     ax = axes[1, 0]
     sample_vars = x0_samples.float().var(0).cpu().numpy()
-    target_vars = lam0_batch[0].cpu().numpy()  # For Poisson, var = mean
+    target_vars = x0_target.float().var(0).cpu().numpy()
     
     ax.bar(dims - width/2, sample_vars, width, label='Generated var', alpha=0.7)
-    ax.bar(dims + width/2, target_vars, width, label='Target var (λ₀)', alpha=0.7)
+    ax.bar(dims + width/2, target_vars, width, label='Target var', alpha=0.7)
     ax.set_xlabel('Dimension')
     ax.set_ylabel('Variance')
     ax.set_title('Variance Comparison')
@@ -240,7 +207,7 @@ def plot_generation_analysis(x0_samples, lam0_batch, lam1_batch, title="Generati
     ax.scatter(target_means, sample_means, alpha=0.7)
     min_val, max_val = min(target_means.min(), sample_means.min()), max(target_means.max(), sample_means.max())
     ax.plot([min_val, max_val], [min_val, max_val], 'r--', alpha=0.7, label='Perfect match')
-    ax.set_xlabel('Target λ₀')
+    ax.set_xlabel('Target mean')
     ax.set_ylabel('Generated mean')
     ax.set_title('Mean Correlation')
     ax.legend()
@@ -276,170 +243,3 @@ def plot_loss_curve(losses, title="Training Loss"):
         ax.legend()
     
     return fig
-
-
-def debug_model_predictions(model, sampler, device="cuda", n_samples=100):
-    """Debug what the model is actually predicting"""
-    model.eval()
-    
-    # Sample some data
-    x0, x1, x_t, ts, z, r = [
-        t.to(device) if torch.is_tensor(t) else t
-        for t in sampler(n_samples, 4, 30)
-    ]
-    
-    with torch.no_grad():
-        if isinstance(model, NBPosterior):
-            raw_output = model.net(torch.cat([x_t.float(), ts.float(), z.float()], dim=-1))
-            r_pred, p_pred = model.process_output(raw_output)
-            
-            fig, axes = plt.subplots(2, 3, figsize=(15, 8))
-            fig.suptitle("NB Model Predictions Debug")
-            
-            # Plot r predictions
-            axes[0, 0].hist(r_pred.cpu().numpy().flatten(), bins=30, alpha=0.7)
-            axes[0, 0].set_title('Predicted r values')
-            axes[0, 0].set_xlabel('r')
-            
-            # Plot p predictions
-            axes[0, 1].hist(p_pred.cpu().numpy().flatten(), bins=30, alpha=0.7)
-            axes[0, 1].set_title('Predicted p values')
-            axes[0, 1].set_xlabel('p')
-            
-            # Plot NB means
-            nb_means = r_pred * (1 - p_pred) / p_pred
-            axes[0, 2].hist(nb_means.cpu().numpy().flatten(), bins=30, alpha=0.7)
-            axes[0, 2].set_title('NB Distribution Means')
-            axes[0, 2].set_xlabel('Mean')
-            
-            # Compare with true x0
-            axes[1, 0].scatter(x0.cpu().numpy().flatten(), nb_means.cpu().numpy().flatten(), alpha=0.5)
-            axes[1, 0].set_xlabel('True x₀')
-            axes[1, 0].set_ylabel('Predicted mean')
-            axes[1, 0].set_title('Prediction vs Truth')
-            
-            # Plot time vs predictions
-            ts_expanded = ts.expand_as(nb_means)
-            axes[1, 1].scatter(ts_expanded.cpu().numpy().flatten(), nb_means.cpu().numpy().flatten(), alpha=0.5)
-            axes[1, 1].set_xlabel('Time t')
-            axes[1, 1].set_ylabel('Predicted mean')
-            axes[1, 1].set_title('Time vs Predictions')
-            
-            # Plot residuals
-            residuals = x0.float() - nb_means
-            axes[1, 2].hist(residuals.cpu().numpy().flatten(), bins=30, alpha=0.7)
-            axes[1, 2].set_title('Prediction Residuals')
-            axes[1, 2].set_xlabel('x₀ - predicted_mean')
-            
-        elif isinstance(model, BetaBinomialPosterior):
-            raw_output = model.net(torch.cat([x_t.float(), ts.float(), z.float()], dim=-1))
-            n_pred, alpha_pred, beta_pred = model.process_output(raw_output)
-            
-            concentration = alpha_pred + beta_pred
-            mean_p = alpha_pred / concentration
-            
-            fig, axes = plt.subplots(2, 3, figsize=(15, 8))
-            fig.suptitle("Beta-Binomial Model Predictions Debug")
-            
-            # Plot n predictions
-            axes[0, 0].hist(n_pred.cpu().numpy().flatten(), bins=30, alpha=0.7)
-            axes[0, 0].set_title('Predicted n values')
-            axes[0, 0].set_xlabel('n')
-            
-            # Plot mean_p predictions
-            axes[0, 1].hist(mean_p.cpu().numpy().flatten(), bins=30, alpha=0.7)
-            axes[0, 1].set_title('Predicted mean_p values')
-            axes[0, 1].set_xlabel('mean_p = α/(α+β)')
-            
-            # Plot concentration predictions
-            axes[0, 2].hist(concentration.cpu().numpy().flatten(), bins=30, alpha=0.7)
-            axes[0, 2].set_title('Predicted concentration values')
-            axes[0, 2].set_xlabel('concentration = α+β')
-            
-            # Plot BB means
-            bb_means = n_pred * alpha_pred / (alpha_pred + beta_pred)
-            axes[1, 0].scatter(x0.cpu().numpy().flatten(), bb_means.cpu().numpy().flatten(), alpha=0.5)
-            axes[1, 0].set_xlabel('True x₀')
-            axes[1, 0].set_ylabel('Predicted mean')
-            axes[1, 0].set_title('Prediction vs Truth')
-            
-            # Plot time vs predictions
-            ts_expanded = ts.expand_as(bb_means)
-            axes[1, 1].scatter(ts_expanded.cpu().numpy().flatten(), bb_means.cpu().numpy().flatten(), alpha=0.5)
-            axes[1, 1].set_xlabel('Time t')
-            axes[1, 1].set_ylabel('Predicted mean')
-            axes[1, 1].set_title('Time vs Predictions')
-            
-            # Plot residuals
-            residuals = x0.float() - bb_means
-            axes[1, 2].hist(residuals.cpu().numpy().flatten(), bins=30, alpha=0.7)
-            axes[1, 2].set_title('Prediction Residuals')
-            axes[1, 2].set_xlabel('x₀ - predicted_mean')
-
-        elif isinstance(model, ZeroInflatedPoissonPosterior):
-            raw_output = model.net(torch.cat([x_t.float(), ts.float(), z.float()], dim=-1))
-            lam_pred, pi_pred = model.process_output(raw_output)
-            
-            fig, axes = plt.subplots(2, 3, figsize=(15, 8))
-            fig.suptitle("Zero-Inflated Poisson Model Predictions Debug")
-            
-            # Plot lambda predictions
-            axes[0, 0].hist(lam_pred.cpu().numpy().flatten(), bins=30, alpha=0.7)
-            axes[0, 0].set_title('Predicted λ values')
-            axes[0, 0].set_xlabel('λ')
-            
-            # Plot pi predictions
-            axes[0, 1].hist(pi_pred.cpu().numpy().flatten(), bins=30, alpha=0.7)
-            axes[0, 1].set_title('Predicted π values (zero inflation)')
-            axes[0, 1].set_xlabel('π')
-            
-            # Plot ZIP means
-            zip_means = (1 - pi_pred) * lam_pred
-            axes[0, 2].hist(zip_means.cpu().numpy().flatten(), bins=30, alpha=0.7)
-            axes[0, 2].set_title('ZIP Distribution Means')
-            axes[0, 2].set_xlabel('Mean = (1-π)λ')
-            
-            # Compare with true x0
-            axes[1, 0].scatter(x0.cpu().numpy().flatten(), zip_means.cpu().numpy().flatten(), alpha=0.5)
-            axes[1, 0].set_xlabel('True x₀')
-            axes[1, 0].set_ylabel('Predicted mean')
-            axes[1, 0].set_title('Prediction vs Truth')
-            
-            # Plot time vs predictions
-            ts_expanded = ts.expand_as(zip_means)
-            axes[1, 1].scatter(ts_expanded.cpu().numpy().flatten(), zip_means.cpu().numpy().flatten(), alpha=0.5)
-            axes[1, 1].set_xlabel('Time t')
-            axes[1, 1].set_ylabel('Predicted mean')
-            axes[1, 1].set_title('Time vs Predictions')
-            
-            # Plot residuals
-            residuals = x0.float() - zip_means
-            axes[1, 2].hist(residuals.cpu().numpy().flatten(), bins=30, alpha=0.7)
-            axes[1, 2].set_title('Prediction Residuals')
-            axes[1, 2].set_xlabel('x₀ - predicted_mean')
-
-        else:  # MLERegressor
-            log_pred = model(x_t, z, ts)
-            x0_pred = torch.exp(log_pred) - 1
-            
-            fig, axes = plt.subplots(1, 3, figsize=(15, 4))
-            fig.suptitle("MLE Model Predictions Debug")
-            
-            axes[0].scatter(x0.cpu().numpy().flatten(), x0_pred.cpu().numpy().flatten(), alpha=0.5)
-            axes[0].set_xlabel('True x₀')
-            axes[0].set_ylabel('Predicted x₀')
-            axes[0].set_title('Prediction vs Truth')
-            
-            ts_expanded = ts.expand_as(x0_pred)
-            axes[1].scatter(ts_expanded.cpu().numpy().flatten(), x0_pred.cpu().numpy().flatten(), alpha=0.5)
-            axes[1].set_xlabel('Time t')
-            axes[1].set_ylabel('Predicted x₀')
-            axes[1].set_title('Time vs Predictions')
-            
-            residuals = x0.float() - x0_pred
-            axes[2].hist(residuals.cpu().numpy().flatten(), bins=30, alpha=0.7)
-            axes[2].set_title('Prediction Residuals')
-            axes[2].set_xlabel('x₀ - predicted')
-    
-    plt.tight_layout()
-    return fig 

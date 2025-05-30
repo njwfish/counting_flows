@@ -12,16 +12,13 @@ from pathlib import Path
 
 from .cli import parse_args
 from .models import NBPosterior, BetaBinomialPosterior, MLERegressor, ZeroInflatedPoissonPosterior
-from .datasets import create_dataloader
-from .samplers import reverse_sampler
+from .datasets import PoissonBridgeCollate, NBBridgeCollate
 from .training import train_model, create_training_dataloader
+from .samplers import reverse_sampler
 from .visualization import (
-    plot_schedule_comparison, plot_time_spacing_comparison, plot_bridge_dynamics,
-    plot_reverse_trajectory, plot_generation_analysis, plot_loss_curve, debug_model_predictions
+    plot_schedule_comparison, plot_time_spacing_comparison,
+    plot_reverse_trajectory, plot_generation_analysis, plot_loss_curve
 )
-
-# Legacy bridge samplers for visualization (still needed for plotting functions)
-# from .bridges import sample_batch_poisson, sample_batch_nb
 
 
 def setup_plot_directories(base_dir="plots"):
@@ -29,7 +26,6 @@ def setup_plot_directories(base_dir="plots"):
     dirs = [
         f"{base_dir}/schedules",
         f"{base_dir}/training", 
-        f"{base_dir}/bridges",
         f"{base_dir}/sampling",
         f"{base_dir}/analysis"
     ]
@@ -40,7 +36,6 @@ def setup_plot_directories(base_dir="plots"):
     return {
         'schedules': f"{base_dir}/schedules",
         'training': f"{base_dir}/training",
-        'bridges': f"{base_dir}/bridges", 
         'sampling': f"{base_dir}/sampling",
         'analysis': f"{base_dir}/analysis"
     }
@@ -76,7 +71,7 @@ def main():
     }
     
     # Setup plot directories
-    plot_dirs = setup_plot_directories() if args.debug else None
+    plot_dirs = setup_plot_directories() if args.plot else None
     
     print("Count-based Flow Matching")
     print("=" * 50)
@@ -135,7 +130,6 @@ def main():
             fixed_base=args.fixed_base,
             r_min=args.r_min,
             r_max=args.r_max,
-            lam_scale=args.data_scale,
             r_schedule=args.r_schedule,
             time_schedule=args.time_schedule,
             **schedule_kwargs
@@ -152,7 +146,6 @@ def main():
             n_steps=args.steps,
             dataset_size=dataset_size,
             fixed_base=args.fixed_base,
-            lam_scale=args.data_scale,
             time_schedule=args.time_schedule,
             **schedule_kwargs
         )
@@ -175,128 +168,62 @@ def main():
     print(f"Time schedule: {sample_time_schedule}")
     
     with torch.no_grad():
-        # Generate target distributions based on dataset type
-        if args.dataset == "poisson":
-            if args.fixed_base:
-                # Fixed λ₀, random λ₁
-                lam0 = torch.full((1, args.data_dim), 5.0)  # Use default fixed lambda
-                lam1 = args.data_scale * torch.rand(1, args.data_dim)
-            else:
-                # Both random
-                lam0 = args.data_scale * torch.rand(1, args.data_dim)
-                lam1 = args.data_scale * torch.rand(1, args.data_dim)
-            
-            target_std_0 = torch.sqrt(lam0)  # Poisson std = sqrt(λ)
-            target_std_1 = torch.sqrt(lam1)
-            
-        elif args.dataset == "betabinomial":
-            # BetaBinomial is more complex - approximate with means for sampling
-            if args.fixed_base:
-                # Fixed parameters for x₀
-                n0 = torch.full((1, args.data_dim), 10.0)
-                alpha0 = torch.full((1, args.data_dim), 0.5)
-                beta0 = torch.full((1, args.data_dim), 0.5)
-                # Random parameters for x₁
-                n1 = torch.randint(5, 21, (1, args.data_dim)).float()
-                alpha1 = 0.1 + 1.9 * torch.rand(1, args.data_dim)
-                beta1 = 0.1 + 1.9 * torch.rand(1, args.data_dim)
-            else:
-                # Both random
-                n0 = torch.randint(5, 21, (1, args.data_dim)).float()
-                alpha0 = 0.1 + 1.9 * torch.rand(1, args.data_dim)
-                beta0 = 0.1 + 1.9 * torch.rand(1, args.data_dim)
-                n1 = torch.randint(5, 21, (1, args.data_dim)).float()
-                alpha1 = 0.1 + 1.9 * torch.rand(1, args.data_dim)
-                beta1 = 0.1 + 1.9 * torch.rand(1, args.data_dim)
-            
-            # BetaBinomial mean = n * alpha / (alpha + beta)
-            # BetaBinomial var = n * alpha * beta * (alpha + beta + n) / ((alpha + beta)^2 * (alpha + beta + 1))
-            mean0 = n0 * alpha0 / (alpha0 + beta0)
-            mean1 = n1 * alpha1 / (alpha1 + beta1)
-            
-            var0 = n0 * alpha0 * beta0 * (alpha0 + beta0 + n0) / ((alpha0 + beta0)**2 * (alpha0 + beta0 + 1))
-            var1 = n1 * alpha1 * beta1 * (alpha1 + beta1 + n1) / ((alpha1 + beta1)**2 * (alpha1 + beta1 + 1))
-            
-            target_std_0 = torch.sqrt(var0)
-            target_std_1 = torch.sqrt(var1)
-            
-            # For reverse sampling, approximate with Poisson using means
-            lam0 = mean0
-            lam1 = mean1
-            
-        else:
-            # Default fallback
-            lam0 = args.data_scale * torch.rand(1, args.data_dim)
-            lam1 = args.data_scale * torch.rand(1, args.data_dim)
-            target_std_0 = torch.sqrt(lam0)
-            target_std_1 = torch.sqrt(lam1)
+        # Sample evaluation batch directly from dataset
+        print("Sampling evaluation batch from dataset...")
         
-        lam1_batch = lam1.repeat(args.gen_samples, 1)
-        lam0_batch = lam0.repeat(args.gen_samples, 1)
+        # Create dataset that generates batches directly
+        eval_dataset = train_dataset.__class__(
+            size=args.gen_samples,  # Total size
+            d=args.data_dim,
+            fixed_base=args.fixed_base,
+            batch_size=args.gen_samples,  # Generate one large batch
+            homogeneous=False,  # Different parameters per sample
+            **{k: v for k, v in vars(train_dataset).items() 
+               if k not in ['size', 'd', 'fixed_base', 'batch_size', 'homogeneous', 'base_params']}
+        )
         
-        x1 = Poisson(lam1_batch).sample().to(device)
-        z_gen = torch.cat([lam0_batch, lam1_batch], dim=1).to(device)
+        # Get the batch (x0_target, x1, z)
+        batch = eval_dataset[0]  # Single batch containing all samples
+        x0_target = batch['x0'].to(device)
+        x1_batch = batch['x1'].to(device)
+        z_batch = batch['z'].to(device)
         
+        # Use reverse sampler to generate x0 from x1 using the bridge
+        print(f"Using reverse sampler to generate x0 from x1...")
         x0_samples = reverse_sampler(
-            x1, z_gen, model,
-            K=args.steps, 
+            x1_batch, z_batch, model,
+            K=args.steps,
             mode=sample_bridge_mode,
             r_min=args.r_min,
             r_max=args.r_max,
             r_schedule=sample_r_schedule,
             time_schedule=sample_time_schedule,
-            use_mean=args.use_mean, 
+            use_mean=args.use_mean,
             device=device,
             **schedule_kwargs
         )
         
+        # Compute statistics
+        sample_mean = x0_samples.float().mean(0)
+        target_mean = x0_target.float().mean(0) 
+        sample_std = x0_samples.float().std(0)
+        target_std = x0_target.float().std(0)
+        
         print(f"\nResults:")
         print(f"Generated samples shape: {x0_samples.shape}")
-        print(f"Sample mean:  {x0_samples.float().mean(0).cpu().numpy()}")
-        print(f"Target λ₀:    {lam0_batch[0].cpu().numpy()}")
-        print(f"Target λ₁:    {lam1_batch[0].cpu().numpy()}")
-        print(f"Sample std:   {x0_samples.float().std(0).cpu().numpy()}")
-        print(f"Target std₀:  {target_std_0[0].cpu().numpy()}")
-        print(f"Target std₁:  {target_std_1[0].cpu().numpy()}")
+        print(f"Sample mean:  {sample_mean.cpu().numpy()}")
+        print(f"Target mean:  {target_mean.cpu().numpy()}")
+        print(f"Sample std:   {sample_std.cpu().numpy()}")
+        print(f"Target std:   {target_std.cpu().numpy()}")
+        
+        # Compute error metrics
+        mean_error = torch.abs(sample_mean - target_mean).mean()
+        std_error = torch.abs(sample_std - target_std).mean()
+        print(f"Mean abs error (mean): {mean_error:.4f}")
+        print(f"Mean abs error (std):  {std_error:.4f}")
 
-    if args.debug:
+    if args.plot:
         print(f"\nGenerating diagnostic plots...")
-        
-        # Create mock legacy samplers for visualization functions
-        # These generate data in the old format that the plotting functions expect
-        def create_mock_legacy_sampler(bridge_type, dataset_type):
-            def mock_sampler(B, d, n_steps):
-                # Create a small batch using the new system
-                temp_dataloader, _ = create_training_dataloader(
-                    bridge_type=bridge_type,
-                    dataset_type=dataset_type,
-                    batch_size=B,
-                    d=d,
-                    n_steps=n_steps,
-                    dataset_size=B,
-                    fixed_base=args.fixed_base,
-                    r_min=args.r_min,
-                    r_max=args.r_max,
-                    lam_scale=args.data_scale,
-                    r_schedule=args.r_schedule,
-                    time_schedule=args.time_schedule,
-                    **schedule_kwargs
-                )
-                
-                # Get one batch and reformat to legacy format
-                batch = next(iter(temp_dataloader))
-                x0 = batch['x0']
-                x1 = batch['x1'] 
-                x_t = batch['x_t']
-                t = batch['t'].unsqueeze(-1)
-                z = batch['z']
-                r = batch['r']
-                
-                return x0, x1, x_t, t, z, r
-            
-            return mock_sampler
-        
-        legacy_sampler = create_mock_legacy_sampler(args.bridge, args.dataset)
         
         # Create config string for filenames
         config_str = f"{args.arch}_{args.bridge}_{args.r_schedule}_{args.time_schedule}"
@@ -316,33 +243,34 @@ def main():
         plt.savefig(f"{plot_dirs['training']}/loss_{config_str}.png", dpi=150, bbox_inches='tight')
         plt.close()
 
-        # Plot bridge dynamics
-        fig = plot_bridge_dynamics(legacy_sampler, title=f"Bridge Dynamics ({args.bridge}, {args.r_schedule}, {args.time_schedule})")
-        plt.savefig(f"{plot_dirs['bridges']}/dynamics_{config_str}.png", dpi=150, bbox_inches='tight')
-        plt.close()
-
         # Plot reverse trajectory
-        fig = plot_reverse_trajectory(x1, z_gen, model, mode=sample_bridge_mode)
+        fig = plot_reverse_trajectory(
+            x1_batch, z_batch, model, 
+            K=args.steps, 
+            mode=sample_bridge_mode, 
+            device=device,
+            n_trajectories=5,
+            r_min=args.r_min,
+            r_max=args.r_max,
+            r_schedule=sample_r_schedule,
+            time_schedule=sample_time_schedule,
+            **schedule_kwargs
+        )
         plt.savefig(f"{plot_dirs['sampling']}/trajectories_{sample_config_str}.png", dpi=150, bbox_inches='tight')
         plt.close()
 
         # Plot generation analysis
-        fig = plot_generation_analysis(x0_samples, lam0_batch, lam1_batch, 
+        fig = plot_generation_analysis(x0_samples, x0_target, x1_batch, 
                                      title=f"Generation Analysis ({args.arch} + {sample_bridge_mode}, {sample_r_schedule}, {sample_time_schedule})")
         plt.savefig(f"{plot_dirs['analysis']}/generation_{sample_config_str}.png", dpi=150, bbox_inches='tight')
-        plt.close()
-
-        # Debug model predictions
-        fig = debug_model_predictions(model, legacy_sampler, device=device)
-        plt.savefig(f"{plot_dirs['analysis']}/predictions_{config_str}.png", dpi=150, bbox_inches='tight')
         plt.close()
         
         print(f"Plots saved to organized directories:")
         print(f"  Schedules: {plot_dirs['schedules']}/")
         print(f"  Training:  {plot_dirs['training']}/")
-        print(f"  Bridges:   {plot_dirs['bridges']}/")
         print(f"  Sampling:  {plot_dirs['sampling']}/")
         print(f"  Analysis:  {plot_dirs['analysis']}/")
+        print(f"\nNote: Some debug plots were removed due to deprecated code dependencies.")
 
 
 if __name__ == "__main__":

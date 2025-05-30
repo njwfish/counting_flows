@@ -14,42 +14,37 @@ import torch.nn.functional as F
 from torch.distributions import NegativeBinomial, Beta
 from abc import ABC, abstractmethod
 
-# Add BetaBinomial import
-try:
-    from torch.distributions import BetaBinomial
-except ImportError:
-    # Fallback implementation if BetaBinomial is not available
-    class BetaBinomial:
-        def __init__(self, total_count, concentration1, concentration0):
-            self.total_count = total_count
-            self.concentration1 = concentration1  # alpha
-            self.concentration0 = concentration0  # beta
-            
-        def sample(self):
-            # Sample p from Beta(alpha, beta), then sample from Binomial(n, p)
-            beta_dist = Beta(self.concentration1, self.concentration0)
-            p = beta_dist.sample()
-            binomial_dist = torch.distributions.Binomial(total_count=self.total_count, probs=p)
-            return binomial_dist.sample()
+class BetaBinomial:
+    def __init__(self, total_count, concentration1, concentration0):
+        self.total_count = total_count
+        self.concentration1 = concentration1  # alpha
+        self.concentration0 = concentration0  # beta
         
-        def log_prob(self, value):
-            # Beta-binomial log-likelihood
-            n = self.total_count
-            alpha = self.concentration1  
-            beta = self.concentration0
-            k = value
-            
-            # Log-likelihood: log(C(n,k)) + log(B(k+alpha, n-k+beta)) - log(B(alpha, beta))
-            log_comb = torch.lgamma(n + 1) - torch.lgamma(k + 1) - torch.lgamma(n - k + 1)
-            log_beta_num = torch.lgamma(k + alpha) + torch.lgamma(n - k + beta) - torch.lgamma(n + alpha + beta)
-            log_beta_den = torch.lgamma(alpha) + torch.lgamma(beta) - torch.lgamma(alpha + beta)
-            
-            return log_comb + log_beta_num - log_beta_den
+    def sample(self):
+        # Sample p from Beta(alpha, beta), then sample from Binomial(n, p)
+        beta_dist = Beta(self.concentration1, self.concentration0)
+        p = beta_dist.sample()
+        binomial_dist = torch.distributions.Binomial(total_count=self.total_count, probs=p)
+        return binomial_dist.sample()
+    
+    def log_prob(self, value):
+        # Beta-binomial log-likelihood
+        n = self.total_count
+        alpha = self.concentration1  
+        beta = self.concentration0
+        k = value
         
-        @property
-        def mean(self):
-            # Mean of beta-binomial: n * alpha / (alpha + beta)
-            return self.total_count * self.concentration1 / (self.concentration1 + self.concentration0)
+        # Log-likelihood: log(C(n,k)) + log(B(k+alpha, n-k+beta)) - log(B(alpha, beta))
+        log_comb = torch.lgamma(n + 1) - torch.lgamma(k + 1) - torch.lgamma(n - k + 1)
+        log_beta_num = torch.lgamma(k + alpha) + torch.lgamma(n - k + beta) - torch.lgamma(n + alpha + beta)
+        log_beta_den = torch.lgamma(alpha) + torch.lgamma(beta) - torch.lgamma(alpha + beta)
+        
+        return log_comb + log_beta_num - log_beta_den
+    
+    @property
+    def mean(self):
+        # Mean of beta-binomial: n * alpha / (alpha + beta)
+        return self.total_count * self.concentration1 / (self.concentration1 + self.concentration0)
 
 
 class BaseCountModel(nn.Module, ABC):

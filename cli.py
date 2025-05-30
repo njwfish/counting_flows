@@ -26,11 +26,6 @@ def parse_args():
     )
     
     parser.add_argument(
-        "--data-scale", "--lam-scale", type=float, default=50.0,
-        help="Scale factor for data generation"
-    )
-    
-    parser.add_argument(
         "--fixed-base", action="store_true",
         help="Use fixed base measure (x₀) instead of random"
     )
@@ -119,7 +114,7 @@ def parse_args():
     parser.add_argument("--use-mean", action="store_true", help="Use mean instead of sampling during generation")
     
     # Debugging
-    parser.add_argument("--debug", action="store_true", help="Show debugging plots")
+    parser.add_argument("--plot", action="store_true", help="Generate diagnostic plots and visualizations")
     parser.add_argument("--quick", action="store_true", help="Quick run with fewer iterations")
     
     # Device
