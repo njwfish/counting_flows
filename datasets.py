@@ -423,16 +423,18 @@ class PoissonBDBridgeCollate:
         # Create time spacing
         self.time_points = make_time_spacing_schedule(n_steps, time_schedule, **schedule_kwargs)
 
-    def _sample_N_B1(self, diff: torch.Tensor, device):
+    def _sample_N_B1(self, diff: torch.Tensor, Lambda_p: torch.Tensor, Lambda_m: torch.Tensor, device):
         """
         diff = x1 - x0   (shape [B, d])
+        Lambda_p, Lambda_m: Final cumulative integrals from lambda schedule (scalars)
         Returns N (total jumps) and B1 (birth count at t=1).
-        Uses Poisson for total jumps.
+        Uses Poisson for total jumps with lambda_star from schedule.
         """
         B, d = diff.shape
-        #  M ~ Poisson(rate)  where rate could be learned or fixed
-        rate = 1.0  # Simple fixed rate, could be made configurable
-        M = Poisson(rate).sample((B, d)).long().to(device)
+        # Use the cumulative lambda integrals
+        lambda_star = 2.0 * torch.sqrt(Lambda_p * Lambda_m)        # scalar
+        lambda_star = lambda_star.unsqueeze(-1).expand_as(diff)    # shape (B, d)
+        M = torch.poisson(lambda_star).long().to(device)
         N = diff.abs() + 2 * M
         B1 = (N + diff) // 2   # integer division
         return N, B1
@@ -462,7 +464,7 @@ class PoissonBDBridgeCollate:
 
         # latent (N,B1)
         diff = (x1 - x0)          # (B, d) - don't squeeze
-        N, B1 = self._sample_N_B1(diff, device)       # shape (B, d)
+        N, B1 = self._sample_N_B1(diff, Λp[-1], Λm[-1], device)       # shape (B, d)
 
         # pick random interior k (avoid k=0,K)
         k_idx = torch.randint(1, self.n_steps, (B,), device=device)
