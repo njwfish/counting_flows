@@ -7,45 +7,68 @@ Provides comprehensive plotting and debugging visualization for count flows.
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
-from .scheduling import make_time_spacing_schedule, make_r_schedule
+from .scheduling import make_time_spacing_schedule, make_phi_schedule
 from .samplers import reverse_sampler
 
 
 def plot_schedule_comparison(K=50, title="Schedule Comparison"):
-    """Visualize different r(t) schedule types"""
-    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    """Visualize different r(t) and Φ(t) schedule types"""
+    fig, axes = plt.subplots(3, 3, figsize=(18, 15))
     fig.suptitle(title)
     
     # R schedules (for NB bridge)
     schedule_types = ["linear", "cosine", "exponential", "polynomial", "sqrt", "sigmoid"]
     
     for i, schedule_type in enumerate(schedule_types):
+        if i >= 6:  # Only plot first 6 schedules
+            break
+            
         ax = axes[i//3, i%3]
         
         try:
             # Default parameters for each schedule
             kwargs = {}
             if schedule_type == "exponential":
-                kwargs = {'decay_rate': 2.0}
+                kwargs = {'growth_rate': 2.0}
             elif schedule_type == "polynomial":
                 kwargs = {'power': 2.0}
             elif schedule_type == "sigmoid":
                 kwargs = {'steepness': 10.0, 'midpoint': 0.5}
             
-            r_sched = make_r_schedule(K, r_min=1.0, r_max=20.0, 
-                                    r_schedule=schedule_type, **kwargs)
-            times = torch.linspace(0, 1, K)
+            phi_sched, R = make_phi_schedule(K, phi_min=0.0, phi_max=20.0, 
+                                           schedule_type=schedule_type, **kwargs)
+            times = torch.linspace(0, 1, K+1)
             
-            ax.plot(times.numpy(), r_sched.numpy(), linewidth=2, label=schedule_type)
+            # Plot Φ(t) schedule
+            ax.plot(times.numpy(), phi_sched.numpy(), linewidth=2, label=f'Φ(t) {schedule_type}', color='blue')
+            
             ax.set_title(f'{schedule_type.title()} Schedule')
             ax.set_xlabel('Time t')
-            ax.set_ylabel('r(t) value')
+            ax.set_ylabel('Φ(t) value', color='blue')
             ax.grid(True, alpha=0.3)
-            ax.set_ylim(0, 21)
+            ax.tick_params(axis='y', labelcolor='blue')
+            ax.legend(loc='upper left')
             
         except Exception as e:
             ax.text(0.5, 0.5, f'Error: {str(e)}', transform=ax.transAxes, ha='center')
             ax.set_title(f'{schedule_type.title()} (Error)')
+    
+    # Add comparison plot showing different phi schedules
+    if len(schedule_types) >= 2:
+        ax = axes[2, 0]
+        
+        # Compare different phi schedules
+        phi_linear, _ = make_phi_schedule(K, phi_min=0.0, phi_max=20.0, schedule_type="linear")
+        phi_cosine, _ = make_phi_schedule(K, phi_min=0.0, phi_max=20.0, schedule_type="cosine")
+        times = torch.linspace(0, 1, K+1)
+        
+        ax.plot(times.numpy(), phi_linear.numpy(), linewidth=2, label='Linear Φ(t)', color='blue')
+        ax.plot(times.numpy(), phi_cosine.numpy(), linewidth=2, label='Cosine Φ(t)', color='green')
+        ax.set_title('Comparison: Different Φ(t) Schedules')
+        ax.set_xlabel('Time t')
+        ax.set_ylabel('Φ(t) value')
+        ax.grid(True, alpha=0.3)
+        ax.legend()
     
     plt.tight_layout()
     return fig
@@ -92,14 +115,22 @@ def plot_time_spacing_comparison(K=50, title="Time Spacing Comparison"):
 
 
 def plot_reverse_trajectory(x1, z, model, K=30, mode="poisson", device="cuda", n_trajectories=5, 
-                           r_min=1.0, r_max=20.0, r_schedule="linear", time_schedule="uniform", **schedule_kwargs):
+                           r_min=1.0, r_max=20.0, r_schedule="linear", time_schedule="uniform", 
+                           bd_r=1.0, bd_beta=1.0, lam_p0=8.0, lam_p1=8.0, lam_m0=8.0, lam_m1=8.0, 
+                           bd_schedule_type="constant", **schedule_kwargs):
     """Plot the reverse sampling trajectory"""
     fig, axes = plt.subplots(2, 2, figsize=(12, 8))
     fig.suptitle(f"Reverse Sampling Trajectories ({mode} bridge)")
     
     # Get the time schedule used in sampling
-    time_points = make_time_spacing_schedule(K, time_schedule, **schedule_kwargs)
-    time_points = torch.flip(time_points, [0])  # Reverse for backward process
+    if mode in ["poisson_bd", "polya_bd"]:
+        # For BD bridges, use the grid from lambda schedule
+        from .scheduling import make_lambda_schedule
+        grid, _, _, _, _ = make_lambda_schedule(K, lam_p0, lam_p1, lam_m0, lam_m1, bd_schedule_type)
+        time_points = torch.flip(grid, [0])  # Reverse for backward process
+    else:
+        time_points = make_time_spacing_schedule(K, time_schedule, **schedule_kwargs)
+        time_points = torch.flip(time_points, [0])  # Reverse for backward process
     
     trajectories = []
     
@@ -114,6 +145,10 @@ def plot_reverse_trajectory(x1, z, model, K=30, mode="poisson", device="cuda", n
             K=K, mode=mode, device=device,
             r_min=r_min, r_max=r_max,
             r_schedule=r_schedule, time_schedule=time_schedule,
+            # BD-specific parameters
+            bd_r=bd_r, bd_beta=bd_beta,
+            lam_p0=lam_p0, lam_p1=lam_p1, lam_m0=lam_m0, lam_m1=lam_m1,
+            bd_schedule_type=bd_schedule_type,
             return_trajectory=True,
             **schedule_kwargs
         )

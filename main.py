@@ -151,6 +151,55 @@ def main():
         )
         print(f"Bridge: Poisson for training")
         print(f"  Time schedule: {args.time_schedule}")
+    elif args.bridge == "poisson_bd":
+        train_dataloader, train_dataset = create_training_dataloader(
+            bridge_type="poisson_bd",
+            dataset_type=args.dataset,
+            batch_size=args.batch_size,
+            d=args.data_dim,
+            n_steps=args.steps,
+            dataset_size=dataset_size,
+            fixed_base=args.fixed_base,
+            time_schedule=args.time_schedule,
+            lam_p0=args.lam_p0,
+            lam_p1=args.lam_p1,
+            lam_m0=args.lam_m0,
+            lam_m1=args.lam_m1,
+            schedule_type=args.bd_schedule,
+            **schedule_kwargs
+        )
+        print(f"Bridge: Poisson Birth-Death for training")
+        print(f"  Birth rates: λ+({args.lam_p0:.1f} → {args.lam_p1:.1f})")
+        print(f"  Death rates: λ-({args.lam_m0:.1f} → {args.lam_m1:.1f})")
+        print(f"  Lambda schedule: {args.bd_schedule}")
+        print(f"  Time schedule: {args.time_schedule}")
+    elif args.bridge == "polya_bd":
+        train_dataloader, train_dataset = create_training_dataloader(
+            bridge_type="polya_bd",
+            dataset_type=args.dataset,
+            batch_size=args.batch_size,
+            d=args.data_dim,
+            n_steps=args.steps,
+            dataset_size=dataset_size,
+            fixed_base=args.fixed_base,
+            time_schedule=args.time_schedule,
+            r=args.bd_r,
+            beta=args.bd_beta,
+            lam_p0=args.lam_p0,
+            lam_p1=args.lam_p1,
+            lam_m0=args.lam_m0,
+            lam_m1=args.lam_m1,
+            schedule_type=args.bd_schedule,
+            **schedule_kwargs
+        )
+        print(f"Bridge: Polya Birth-Death for training")
+        print(f"  NB parameters: r={args.bd_r:.1f}, β={args.bd_beta:.1f}")
+        print(f"  Birth rates: λ+({args.lam_p0:.1f} → {args.lam_p1:.1f})")
+        print(f"  Death rates: λ-({args.lam_m0:.1f} → {args.lam_m1:.1f})")
+        print(f"  Lambda schedule: {args.bd_schedule}")
+        print(f"  Time schedule: {args.time_schedule}")
+    else:
+        raise ValueError(f"Unknown bridge type: {args.bridge}")
     
     # Train
     print(f"\nTraining model...")
@@ -200,6 +249,14 @@ def main():
             time_schedule=sample_time_schedule,
             use_mean=args.use_mean,
             device=device,
+            # BD-specific parameters
+            bd_r=args.bd_r,
+            bd_beta=args.bd_beta,
+            lam_p0=args.lam_p0,
+            lam_p1=args.lam_p1,
+            lam_m0=args.lam_m0,
+            lam_m1=args.lam_m1,
+            bd_schedule_type=args.bd_schedule,
             **schedule_kwargs
         )
         
@@ -254,6 +311,14 @@ def main():
             r_max=args.r_max,
             r_schedule=sample_r_schedule,
             time_schedule=sample_time_schedule,
+            # BD-specific parameters
+            bd_r=args.bd_r,
+            bd_beta=args.bd_beta,
+            lam_p0=args.lam_p0,
+            lam_p1=args.lam_p1,
+            lam_m0=args.lam_m0,
+            lam_m1=args.lam_m1,
+            bd_schedule_type=args.bd_schedule,
             **schedule_kwargs
         )
         plt.savefig(f"{plot_dirs['sampling']}/trajectories_{sample_config_str}.png", dpi=150, bbox_inches='tight')

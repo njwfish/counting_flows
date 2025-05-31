@@ -13,8 +13,57 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.distributions import Poisson, Binomial, Beta, Gamma, NegativeBinomial, Categorical
 import numpy as np
-from .scheduling import make_r_schedule, make_time_spacing_schedule
+from .scheduling import make_time_spacing_schedule, make_phi_schedule, make_lambda_schedule
 from abc import ABC, abstractmethod
+
+
+def manual_hypergeometric(total_count, num_successes, num_draws):
+    """
+    Vectorized implementation of hypergeometric sampling using numpy broadcasting.
+    
+    Args:
+        total_count: Total population size (array-like)
+        num_successes: Number of success items in population (array-like)
+        num_draws: Number of items drawn (array-like)
+    
+    Returns:
+        Number of successes in the drawn sample (same shape as inputs)
+    """
+    # Convert to numpy arrays for vectorized operations
+    total_count = np.asarray(total_count)
+    num_successes = np.asarray(num_successes)
+    num_draws = np.asarray(num_draws)
+    
+    # Bounds checking to prevent invalid hypergeometric parameters
+    num_successes = np.clip(num_successes, 0, total_count)
+    num_draws = np.clip(num_draws, 0, total_count)
+    
+    # Handle edge cases
+    mask_zero_draws = (num_draws == 0)
+    mask_zero_successes = (num_successes == 0)
+    mask_draws_ge_total = (num_draws >= total_count)
+    mask_successes_ge_total = (num_successes >= total_count)
+    
+    # Use numpy's vectorized hypergeometric
+    result = np.zeros_like(num_draws)
+    
+    # Only call hypergeometric for valid cases
+    valid_mask = ~(mask_zero_draws | mask_zero_successes | mask_draws_ge_total | mask_successes_ge_total)
+    
+    if np.any(valid_mask):
+        result[valid_mask] = np.random.hypergeometric(
+            num_successes[valid_mask], 
+            total_count[valid_mask] - num_successes[valid_mask], 
+            num_draws[valid_mask]
+        )
+    
+    # Handle edge cases
+    result[mask_zero_draws] = 0
+    result[mask_zero_successes] = 0
+    result[mask_draws_ge_total] = num_successes[mask_draws_ge_total]
+    result[mask_successes_ge_total] = num_draws[mask_successes_ge_total]
+    
+    return result
 
 
 class BaseCountDataset(Dataset, ABC):
@@ -284,8 +333,8 @@ class NBBridgeCollate:
         """
         self.n_steps = n_steps
         
-        # Create r(t) schedule
-        self.r_sched = make_r_schedule(n_steps, r_min, r_max, r_schedule, **schedule_kwargs)
+        # Create Φ(t) schedule using proper cumulative integration
+        self.phi_sched, self.R = make_phi_schedule(n_steps, r_min, r_max, r_schedule, **schedule_kwargs)
         
         # Always use make_time_spacing_schedule (handles uniform too)
         self.time_points = make_time_spacing_schedule(n_steps, time_schedule, **schedule_kwargs)
@@ -318,16 +367,16 @@ class NBBridgeCollate:
         
         t_batch = torch.tensor(t_list, dtype=torch.float32, device=device)
         
-        # Get r(t) values for each sample in batch
-        r_t_batch = torch.tensor([self.r_sched[t_idx].item() for t_idx in t_idx_list], 
-                                dtype=torch.float32, device=device)
+        # Get Φ(t) values for each sample in batch (proper bridge parameters)
+        phi_t_batch = torch.tensor([self.phi_sched[t_idx].item() for t_idx in t_idx_list], 
+                                 dtype=torch.float32, device=device)
         
-        # Batch Beta-Binomial bridge sampling
+        # Batch Beta-Binomial bridge sampling using proper formulation
         n = (x1_batch - x0_batch).abs().long()
         
-        # Vectorized alpha/beta computation
-        alpha = torch.clamp(r_t_batch.unsqueeze(-1) * t_batch.unsqueeze(-1), min=1e-3)
-        beta = torch.clamp(r_t_batch.unsqueeze(-1) * (1 - t_batch.unsqueeze(-1)), min=1e-3)
+        # Proper alpha/beta computation: α_t = Φ(t), β_t = R - Φ(t)
+        alpha = torch.clamp(phi_t_batch.unsqueeze(-1), min=1e-3)
+        beta = torch.clamp((self.R - phi_t_batch).unsqueeze(-1), min=1e-3)
         
         # Sample p from Beta distribution
         p = Beta(alpha, beta).sample().clamp(1e-6, 1-1e-6).to(device)
@@ -342,7 +391,216 @@ class NBBridgeCollate:
             'x_t': x_t_batch, 
             't': t_batch,
             'z': z_batch,
-            'r': r_t_batch
+            'r': phi_t_batch  # Now stores Φ(t) values for consistency
+        }
+
+
+class PoissonBDBridgeCollate:
+    """
+    Collate for Poisson birth–death bridge with time‑varying λ₊, λ₋.
+    Produces x_t drawn via Hypergeometric(N,B₁,N_t).
+    """
+
+    def __init__(
+        self,
+        n_steps: int,
+        lam_p0: float = 8.0,
+        lam_p1: float = 8.0,
+        lam_m0: float = 8.0,
+        lam_m1: float = 8.0,
+        schedule_type: str = "constant",
+        time_schedule: str = "uniform",
+        **schedule_kwargs,
+    ):
+        self.n_steps = n_steps
+        self.lam_p0 = lam_p0
+        self.lam_p1 = lam_p1
+        self.lam_m0 = lam_m0
+        self.lam_m1 = lam_m1
+        self.schedule_type = schedule_type
+        self.sched_kwargs = schedule_kwargs
+        
+        # Create time spacing
+        self.time_points = make_time_spacing_schedule(n_steps, time_schedule, **schedule_kwargs)
+
+    def _sample_N_B1(self, diff: torch.Tensor, device):
+        """
+        diff = x1 - x0   (shape [B, d])
+        Returns N (total jumps) and B1 (birth count at t=1).
+        Uses Poisson for total jumps.
+        """
+        B, d = diff.shape
+        #  M ~ Poisson(rate)  where rate could be learned or fixed
+        rate = 1.0  # Simple fixed rate, could be made configurable
+        M = Poisson(rate).sample((B, d)).long().to(device)
+        N = diff.abs() + 2 * M
+        B1 = (N + diff) // 2   # integer division
+        return N, B1
+
+    def _sample_time(self):
+        """Sample time point from pre-computed schedule"""
+        # Sample from valid time points (excluding endpoints)
+        valid_idx = torch.randint(1, len(self.time_points) - 1, (1,)).item()
+        t = self.time_points[valid_idx].item()
+        t_idx = valid_idx
+        return t, t_idx
+
+    def __call__(self, batch):
+        # batch = list of dicts with keys 'x0','x1','z'
+        x0 = torch.stack([b["x0"] for b in batch])  # (B,d)
+        x1 = torch.stack([b["x1"] for b in batch])
+        z  = torch.stack([b["z"]  for b in batch])
+        device = x0.device
+        B, d = x0.shape
+
+        # schedules
+        grid, lam_p, lam_m, Λp, Λm = make_lambda_schedule(
+            self.n_steps, self.lam_p0, self.lam_p1, self.lam_m0, self.lam_m1,
+            self.schedule_type, device=device
+        )
+        Λ_tot1 = Λp[-1] + Λm[-1]
+
+        # latent (N,B1)
+        diff = (x1 - x0)          # (B, d) - don't squeeze
+        N, B1 = self._sample_N_B1(diff, device)       # shape (B, d)
+
+        # pick random interior k (avoid k=0,K)
+        k_idx = torch.randint(1, self.n_steps, (B,), device=device)
+        t     = grid[k_idx]                               # (B,)
+        w_t   = (Λp[k_idx] + Λm[k_idx]) / Λ_tot1          # (B,)
+        N_t   = torch.round(N.float() * w_t.unsqueeze(-1)).long()       # (B, d)
+
+        # draw B_t ~ Hypergeom(N, B1, N_t)
+        B_t = torch.empty_like(N)
+        
+        # Vectorized hypergeometric sampling
+        B_t_np = manual_hypergeometric(
+            total_count=N.cpu().numpy(),
+            num_successes=B1.cpu().numpy(),
+            num_draws=N_t.cpu().numpy()
+        )
+        B_t = torch.from_numpy(B_t_np).to(device)
+
+        x_t = x0 + (2 * B_t - N_t)          # (B, d)
+
+        return {
+            "x0"  : x0,
+            "x1"  : x1,
+            "x_t" : x_t,
+            "t"   : t,
+            "z"   : z,
+            "N"   : N,
+            "B1"  : B1,
+            "grid": grid,
+            "Λp"  : Λp,
+            "Λm"  : Λm,
+        }
+
+
+class PolyaBDBridgeCollate:
+    """
+    Collate for Polya birth–death bridge with time‑varying λ₊, λ₋.
+    Produces x_t drawn via Hypergeometric(N,B₁,N_t).
+    Uses NegativeBinomial for total jumps instead of Poisson.
+    """
+
+    def __init__(
+        self,
+        n_steps: int,
+        r: float = 1.0,
+        beta: float = 1.0,
+        lam_p0: float = 8.0,
+        lam_p1: float = 8.0,
+        lam_m0: float = 8.0,
+        lam_m1: float = 8.0,
+        schedule_type: str = "constant",
+        time_schedule: str = "uniform",
+        **schedule_kwargs,
+    ):
+        self.n_steps = n_steps
+        self.r = r
+        self.beta = beta
+        self.lam_p0 = lam_p0
+        self.lam_p1 = lam_p1
+        self.lam_m0 = lam_m0
+        self.lam_m1 = lam_m1
+        self.schedule_type = schedule_type
+        self.sched_kwargs = schedule_kwargs
+        
+        # Create time spacing
+        self.time_points = make_time_spacing_schedule(n_steps, time_schedule, **schedule_kwargs)
+
+    def _sample_N_B1(self, diff: torch.Tensor, device):
+        """
+        diff = x1 - x0   (shape [B, d])
+        Returns N (total jumps) and B1 (birth count at t=1).
+        Uses NegativeBinomial for total jumps.
+        """
+        B, d = diff.shape
+        #  M ~ NB(r, beta/(beta+1))
+        nb = NegativeBinomial(total_count=self.r, probs=self.beta / (self.beta + 1))
+        M = nb.sample((B, d)).long().to(device)
+        N = diff.abs() + 2 * M
+        B1 = (N + diff) // 2   # integer division
+        return N, B1
+
+    def _sample_time(self):
+        """Sample time point from pre-computed schedule"""
+        # Sample from valid time points (excluding endpoints)
+        valid_idx = torch.randint(1, len(self.time_points) - 1, (1,)).item()
+        t = self.time_points[valid_idx].item()
+        t_idx = valid_idx
+        return t, t_idx
+
+    def __call__(self, batch):
+        # batch = list of dicts with keys 'x0','x1','z'
+        x0 = torch.stack([b["x0"] for b in batch])  # (B,d)
+        x1 = torch.stack([b["x1"] for b in batch])
+        z  = torch.stack([b["z"]  for b in batch])
+        device = x0.device
+        B, d = x0.shape
+
+        # schedules
+        grid, lam_p, lam_m, Λp, Λm = make_lambda_schedule(
+            self.n_steps, self.lam_p0, self.lam_p1, self.lam_m0, self.lam_m1,
+            self.schedule_type, device=device
+        )
+        Λ_tot1 = Λp[-1] + Λm[-1]
+
+        # latent (N,B1)
+        diff = (x1 - x0)          # (B, d) - don't squeeze
+        N, B1 = self._sample_N_B1(diff, device)       # shape (B, d)
+
+        # pick random interior k (avoid k=0,K)
+        k_idx = torch.randint(1, self.n_steps, (B,), device=device)
+        t     = grid[k_idx]                               # (B,)
+        w_t   = (Λp[k_idx] + Λm[k_idx]) / Λ_tot1          # (B,)
+        N_t   = torch.round(N.float() * w_t.unsqueeze(-1)).long()       # (B, d)
+
+        # draw B_t ~ Hypergeom(N, B1, N_t)
+        B_t = torch.empty_like(N)
+        
+        # Vectorized hypergeometric sampling
+        B_t_np = manual_hypergeometric(
+            total_count=N.cpu().numpy(),
+            num_successes=B1.cpu().numpy(),
+            num_draws=N_t.cpu().numpy()
+        )
+        B_t = torch.from_numpy(B_t_np).to(device)
+
+        x_t = x0 + (2 * B_t - N_t)          # (B, d)
+
+        return {
+            "x0"  : x0,
+            "x1"  : x1,
+            "x_t" : x_t,
+            "t"   : t,
+            "z"   : z,
+            "N"   : N,
+            "B1"  : B1,
+            "grid": grid,
+            "Λp"  : Λp,
+            "Λm"  : Λm,
         }
 
 
@@ -370,7 +628,7 @@ def create_dataloader(bridge_type, dataset_type, batch_size, **kwargs):
     Factory function to create DataLoader with appropriate collate function
     
     Args:
-        bridge_type: "poisson" or "nb"
+        bridge_type: "poisson", "nb", "poisson_bd", or "polya_bd"
         dataset_type: "poisson" or "betabinomial"
         batch_size: Batch size for DataLoader
         **kwargs: Arguments passed to Dataset and Collate constructors
@@ -386,7 +644,8 @@ def create_dataloader(bridge_type, dataset_type, batch_size, **kwargs):
     dataset_keys = ['size', 'd', 'lam_scale', 'fixed_base', 'fixed_lam', 
                    'n_scale', 'alpha_range', 'beta_range', 'fixed_n', 'fixed_alpha', 'fixed_beta']
     collate_keys = ['n_steps', 'r_min', 'r_max', 'r_schedule', 'time_schedule',
-                   'decay_rate', 'steepness', 'midpoint', 'power', 'concentration']
+                   'decay_rate', 'steepness', 'midpoint', 'power', 'concentration',
+                   'r', 'beta', 'lam_p0', 'lam_p1', 'lam_m0', 'lam_m1', 'schedule_type']
     
     for key, value in kwargs.items():
         if key in dataset_keys:
@@ -402,6 +661,10 @@ def create_dataloader(bridge_type, dataset_type, batch_size, **kwargs):
         collate_fn = PoissonBridgeCollate(**collate_kwargs)
     elif bridge_type == "nb":
         collate_fn = NBBridgeCollate(**collate_kwargs)
+    elif bridge_type == "poisson_bd":
+        collate_fn = PoissonBDBridgeCollate(**collate_kwargs)
+    elif bridge_type == "polya_bd":
+        collate_fn = PolyaBDBridgeCollate(**collate_kwargs)
     else:
         raise ValueError(f"Unknown bridge type: {bridge_type}")
     
@@ -441,3 +704,4 @@ class InfiniteDataLoader:
     
     def __len__(self):
         return len(self.dataloader)
+ 

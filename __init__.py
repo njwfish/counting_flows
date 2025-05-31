@@ -12,7 +12,7 @@ from .datasets import (
 )
 from .samplers import reverse_sampler
 from .training import train_model, create_training_dataloader
-from .scheduling import make_r_schedule, make_time_spacing_schedule
+from .scheduling import make_time_spacing_schedule
 
 __version__ = "0.1.0"
 __author__ = "Your Name"
@@ -31,6 +31,5 @@ __all__ = [
     "reverse_sampler",
     "train_model",
     "create_training_dataloader",
-    "make_r_schedule", 
     "make_time_spacing_schedule"
 ] 
