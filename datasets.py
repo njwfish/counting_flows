@@ -606,6 +606,129 @@ class PolyaBDBridgeCollate:
         }
 
 
+class ReflectedBDBridgeCollate:
+    """
+    Collate for training with a reflected (non-negative) birth–death bridge
+    under the equal‐rate assumption λ₊(t)=λ₋(t).
+    """
+
+    def __init__(
+        self,
+        n_steps: int,
+        lam0: float = 8.0,
+        lam1: float = 8.0,
+        time_schedule: str = "uniform",
+        **schedule_kwargs,
+    ):
+        """
+        Args:
+          n_steps: number of grid points in [0,1]
+          lam0, lam1: birth=death rates at t=0 and t=1
+          time_schedule: "uniform" | "linear" | …
+        """
+        self.n_steps = n_steps
+
+        # 1) time grid t_k ∈ [0,1]
+        self.time_points = make_time_spacing_schedule(
+            n_steps, time_schedule, **schedule_kwargs
+        )  # (K,)
+
+        # 2) λ(t_k) = lam0 + (lam1−lam0)*t_k
+        self.lam_vals = lam0 + (lam1 - lam0) * self.time_points  # (K,)
+
+        # 3) cumulative integral Λ(t_k) via trapezoid rule
+        dt = 1.0 / (n_steps - 1)
+        lam_mid = 0.5 * (self.lam_vals[:-1] + self.lam_vals[1:])
+        self.Lam = torch.zeros_like(self.lam_vals)
+        self.Lam[1:] = torch.cumsum(lam_mid * dt, dim=0)  # (K,)
+
+    def _sample_time_idx(self, batch_size: int):
+        """
+        Randomly choose an interior index k ∈ {1,...,K-1} for each of B samples.
+        """
+        return torch.randint(1, self.n_steps - 1, size=(batch_size,))
+
+    def __call__(self, batch):
+        """
+        Input:
+          batch: list of dicts with keys 'x0','x1','z'.
+                 Each 'x0','x1' is a Tensor shape (d,), integer counts.
+                 'z' is context (ignored).
+        Output dict:
+          x0:   (B,d)
+          x1:   (B,d)
+          x_t:  (B,d)
+          t:    (B,)   sampled time indices in (0,1)
+          N:    (B,d) latent total jumps at t=1
+          B1:   (B,d) births at t=1 in the signed parent
+          N_t:  (B,d) total jumps at time t
+          B_t:  (B,d) births at time t in the signed parent
+          z:    (B,d) context
+        """
+        x0 = torch.stack([item['x0'] for item in batch], dim=0)  # (B,d)
+        x1 = torch.stack([item['x1'] for item in batch], dim=0)  # (B,d)
+        z  = torch.stack([item.get('z', torch.zeros_like(x0[0])) for item in batch], dim=0)
+        device = x0.device
+        B, d = x0.shape
+
+        # 1) pick random interior time‐index k
+        k_idxs = self._sample_time_idx(B).to(device)  # (B,)
+        t_vals = self.time_points[k_idxs].to(device)  # (B,)
+
+        # 2) final integral Λ(1)
+        Lambda1 = self.Lam[-1].item()  # scalar
+
+        # 3) latent total jumps N at t=1:  N = |x1-x0| + 2*M,  M ~ Pois(2*Λ(1))
+        diff = (x1 - x0).abs()  # (B,d)
+        lam_star = 2.0 * Lambda1  # scalar
+        M = Poisson(lam_star * torch.ones_like(diff, dtype=torch.float32)).sample().long().to(device)  # (B,d)
+        N = diff + 2 * M  # (B,d)
+
+        # 4) signed births at t=1: B1 = (N + (x1-x0)) // 2
+        B1 = (N + (x1 - x0)) // 2  # (B,d)
+
+        # 5) interior total N_t = floor(N * w(t)),  w(t)=Λ(t)/Λ(1)
+        Lam_t = self.Lam[k_idxs].unsqueeze(-1).to(device)  # (B,1)
+        w_t   = (Lam_t / Lambda1).clamp(0.0, 1.0)          # (B,1)
+        N_t   = torch.floor(N.float() * w_t).long()        # (B,d)
+
+        # 6) draw B_t ~ Hypergeom(N, B1, N_t)
+        #    i.e. from the unreflected scheme.  We'll reflect later.
+        B_t = torch.zeros_like(N_t)  # (B,d)
+        N_np   = N.cpu().numpy()
+        B1_np  = B1.cpu().numpy()
+        Nt_np  = N_t.cpu().numpy()
+        out    = np.zeros_like(Nt_np)
+
+        success_clipped = np.minimum(B1_np, N_np)
+        draws_clipped   = np.minimum(Nt_np, N_np)
+
+        mask_valid = (draws_clipped > 0) & (success_clipped > 0)
+        if mask_valid.any():
+            out[mask_valid] = np.random.hypergeometric(
+                success_clipped[mask_valid],
+                (N_np[mask_valid] - success_clipped[mask_valid]),
+                draws_clipped[mask_valid]
+            )
+        B_t = torch.from_numpy(out).to(device)
+
+        # 7) compute unreflected X_t^raw = x0 + (2*B_t - N_t), then reflect
+        x_t = x0 + (2 * B_t - N_t)
+        x_t = x_t.abs().long()  # reflected at zero
+
+        return {
+            'x0' : x0,     # (B,d)
+            'x1' : x1,     # (B,d)
+            'x_t': x_t,    # (B,d)
+            't'  : t_vals, # (B,)
+            'N'  : N,      # (B,d)
+            'B1' : B1,     # (B,d)
+            'N_t': N_t,    # (B,d)
+            'B_t': B_t,    # (B,d)
+            'z'  : z       # (B,d)
+        }
+
+
 def create_dataset(dataset_type, **kwargs):
     """
     Factory function to create dataset instances
@@ -630,7 +753,7 @@ def create_dataloader(bridge_type, dataset_type, batch_size, **kwargs):
     Factory function to create DataLoader with appropriate collate function
     
     Args:
-        bridge_type: "poisson", "nb", "poisson_bd", or "polya_bd"
+        bridge_type: "poisson", "nb", "poisson_bd", "polya_bd", or "reflected_bd"
         dataset_type: "poisson" or "betabinomial"
         batch_size: Batch size for DataLoader
         **kwargs: Arguments passed to Dataset and Collate constructors
@@ -647,7 +770,8 @@ def create_dataloader(bridge_type, dataset_type, batch_size, **kwargs):
                    'n_scale', 'alpha_range', 'beta_range', 'fixed_n', 'fixed_alpha', 'fixed_beta']
     collate_keys = ['n_steps', 'r_min', 'r_max', 'r_schedule', 'time_schedule',
                    'decay_rate', 'steepness', 'midpoint', 'power', 'concentration',
-                   'r', 'beta', 'lam_p0', 'lam_p1', 'lam_m0', 'lam_m1', 'schedule_type']
+                   'r', 'beta', 'lam_p0', 'lam_p1', 'lam_m0', 'lam_m1', 'schedule_type',
+                   'lam0', 'lam1']  # Added lam0, lam1 for reflected_bd
     
     for key, value in kwargs.items():
         if key in dataset_keys:
@@ -667,6 +791,8 @@ def create_dataloader(bridge_type, dataset_type, batch_size, **kwargs):
         collate_fn = PoissonBDBridgeCollate(**collate_kwargs)
     elif bridge_type == "polya_bd":
         collate_fn = PolyaBDBridgeCollate(**collate_kwargs)
+    elif bridge_type == "reflected_bd":
+        collate_fn = ReflectedBDBridgeCollate(**collate_kwargs)
     else:
         raise ValueError(f"Unknown bridge type: {bridge_type}")
     

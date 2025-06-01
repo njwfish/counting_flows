@@ -41,15 +41,15 @@ def parse_args():
     # Bridge mode
     parser.add_argument(
         "--bridge", "--bridge-mode",
-        choices=["nb", "poisson", "poisson_bd", "polya_bd"],
+        choices=["nb", "poisson", "poisson_bd", "polya_bd", "reflected_bd"],
         default="nb", 
-        help="Bridge type: 'nb' (Polya/Beta-Binomial), 'poisson' (exact Poisson), 'poisson_bd' (Poisson Birth-Death), or 'polya_bd' (Polya Birth-Death)"
+        help="Bridge type: 'nb' (Polya/Beta-Binomial), 'poisson' (exact Poisson), 'poisson_bd' (Poisson Birth-Death), 'polya_bd' (Polya Birth-Death), or 'reflected_bd' (Reflected Birth-Death)"
     )
     
     # Sampling bridge mode (can be different from training)
     parser.add_argument(
         "--sample-bridge", 
-        choices=["nb", "poisson", "poisson_bd", "polya_bd", "auto"],
+        choices=["nb", "poisson", "poisson_bd", "polya_bd", "reflected_bd", "auto"],
         default="auto",
         help="Bridge type for sampling (auto=same as training bridge)"
     )
@@ -110,14 +110,17 @@ def parse_args():
     parser.add_argument("--r-max", type=float, default=20.0, help="Maximum r value for NB schedule")
     
     # Birth-death bridge parameters
-    parser.add_argument("--bd-r", type=float, default=1.0, help="r parameter for Polya birth-death bridge")
-    parser.add_argument("--bd-beta", type=float, default=1.0, help="beta parameter for Polya birth-death bridge")
-    parser.add_argument("--lam-p0", type=float, default=8.0, help="Birth rate at t=0 for BD bridges")
-    parser.add_argument("--lam-p1", type=float, default=8.0, help="Birth rate at t=1 for BD bridges")
-    parser.add_argument("--lam-m0", type=float, default=8.0, help="Death rate at t=0 for BD bridges")
-    parser.add_argument("--lam-m1", type=float, default=8.0, help="Death rate at t=1 for BD bridges")
-    parser.add_argument("--bd-schedule", choices=["constant", "linear", "cosine"], default="constant",
-                       help="Schedule type for birth/death rates in BD bridges")
+    parser.add_argument("--bd-r", type=float, default=1.0, help="r parameter for Polya BD bridge")
+    parser.add_argument("--bd-beta", type=float, default=1.0, help="beta parameter for Polya BD bridge")
+    parser.add_argument("--lam-p0", type=float, default=8.0, help="Birth rate λ₊ at t=0 for BD bridges")
+    parser.add_argument("--lam-p1", type=float, default=8.0, help="Birth rate λ₊ at t=1 for BD bridges")
+    parser.add_argument("--lam-m0", type=float, default=8.0, help="Death rate λ₋ at t=0 for BD bridges")
+    parser.add_argument("--lam-m1", type=float, default=8.0, help="Death rate λ₋ at t=1 for BD bridges")
+    parser.add_argument("--bd-schedule", choices=["constant", "linear", "cosine"], default="constant", help="Schedule for birth/death rates")
+    
+    # Reflected BD bridge parameters (equal birth/death rates)
+    parser.add_argument("--lam0", type=float, default=8.0, help="Birth/Death rate λ at t=0 for reflected BD bridge")
+    parser.add_argument("--lam1", type=float, default=8.0, help="Birth/Death rate λ at t=1 for reflected BD bridge")
     
     # Generation parameters
     parser.add_argument("--gen-samples", type=int, default=1000, help="Number of samples to generate")

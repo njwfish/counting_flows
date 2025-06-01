@@ -198,6 +198,23 @@ def main():
         print(f"  Death rates: λ-({args.lam_m0:.1f} → {args.lam_m1:.1f})")
         print(f"  Lambda schedule: {args.bd_schedule}")
         print(f"  Time schedule: {args.time_schedule}")
+    elif args.bridge == "reflected_bd":
+        train_dataloader, train_dataset = create_training_dataloader(
+            bridge_type="reflected_bd",
+            dataset_type=args.dataset,
+            batch_size=args.batch_size,
+            d=args.data_dim,
+            n_steps=args.steps,
+            dataset_size=dataset_size,
+            fixed_base=args.fixed_base,
+            time_schedule=args.time_schedule,
+            lam0=args.lam0,
+            lam1=args.lam1,
+            **schedule_kwargs
+        )
+        print(f"Bridge: Reflected Birth-Death for training")
+        print(f"  Equal rates: λ({args.lam0:.1f} → {args.lam1:.1f})")
+        print(f"  Time schedule: {args.time_schedule}")
     else:
         raise ValueError(f"Unknown bridge type: {args.bridge}")
     
@@ -257,6 +274,9 @@ def main():
             lam_m0=args.lam_m0,
             lam_m1=args.lam_m1,
             bd_schedule_type=args.bd_schedule,
+            # Reflected BD parameters
+            lam0=args.lam0,
+            lam1=args.lam1,
             **schedule_kwargs
         )
         
@@ -319,6 +339,9 @@ def main():
             lam_m0=args.lam_m0,
             lam_m1=args.lam_m1,
             bd_schedule_type=args.bd_schedule,
+            # Reflected BD parameters
+            lam0=args.lam0,
+            lam1=args.lam1,
             **schedule_kwargs
         )
         plt.savefig(f"{plot_dirs['sampling']}/trajectories_{sample_config_str}.png", dpi=150, bbox_inches='tight')

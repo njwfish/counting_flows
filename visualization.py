@@ -117,7 +117,7 @@ def plot_time_spacing_comparison(K=50, title="Time Spacing Comparison"):
 def plot_reverse_trajectory(x1, z, model, K=30, mode="poisson", device="cuda", n_trajectories=5, 
                            r_min=1.0, r_max=20.0, r_schedule="linear", time_schedule="uniform", 
                            bd_r=1.0, bd_beta=1.0, lam_p0=8.0, lam_p1=8.0, lam_m0=8.0, lam_m1=8.0, 
-                           bd_schedule_type="constant", **schedule_kwargs):
+                           bd_schedule_type="constant", lam0=8.0, lam1=8.0, **schedule_kwargs):
     """Plot the reverse sampling trajectory"""
     fig, axes = plt.subplots(2, 2, figsize=(12, 8))
     fig.suptitle(f"Reverse Sampling Trajectories ({mode} bridge)")
@@ -149,6 +149,8 @@ def plot_reverse_trajectory(x1, z, model, K=30, mode="poisson", device="cuda", n
             bd_r=bd_r, bd_beta=bd_beta,
             lam_p0=lam_p0, lam_p1=lam_p1, lam_m0=lam_m0, lam_m1=lam_m1,
             bd_schedule_type=bd_schedule_type,
+            # Reflected BD parameters
+            lam0=lam0, lam1=lam1,
             return_trajectory=True,
             **schedule_kwargs
         )
@@ -160,7 +162,24 @@ def plot_reverse_trajectory(x1, z, model, K=30, mode="poisson", device="cuda", n
         trajectories.append(traj_array)
     
     # Convert time points to numpy for plotting
+    # Make sure time_points matches trajectory length
     time_np = time_points.numpy()
+    
+    # Ensure trajectory and time points have same length
+    if trajectories:
+        traj_length = len(trajectories[0])
+        time_length = len(time_np)
+        
+        print(f"Debug: trajectory length = {traj_length}, time length = {time_length}")
+        
+        # Use the minimum length to avoid index errors
+        min_length = min(time_length, traj_length)
+        if min_length > 0:
+            time_np = time_np[:min_length]
+            trajectories = [traj[:min_length] for traj in trajectories]
+        else:
+            print("Warning: Empty trajectories or time points")
+            return fig
     
     # Plot trajectories for each dimension
     for dim in range(min(4, x1.shape[1])):
