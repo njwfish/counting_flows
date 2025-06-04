@@ -8,7 +8,7 @@ using trained neural networks and bridge kernels.
 import torch
 from torch.distributions import Binomial, Beta, NegativeBinomial
 from .scheduling import make_time_spacing_schedule, make_phi_schedule, get_bridge_parameters, make_lambda_schedule
-from .datasets import manual_hypergeometric
+from .bridges import manual_hypergeometric
 
 
 @torch.no_grad()
@@ -118,7 +118,6 @@ def reverse_sampler(
             M = torch.poisson(lambda_star).long().to(device)
         
         N = diff.abs() + 2 * M
-        B1 = (N + diff) // 2
     
     for step in range(K):
         t_current = time_points[step]
@@ -139,8 +138,11 @@ def reverse_sampler(
             w_s = (Λp[K - k_next] + Λm[K - k_next]) / Λ_tot1 if k_next < K else torch.tensor(0.0, device=device)
             
             # Use floor instead of round to match expected value exactly
-            N_t = torch.floor(N.float() * w_t).long()
-            N_s = torch.floor(N.float() * w_s).long()
+            if step == 0:
+                N_t = torch.binomial(N.float(), w_t).long() #  torch.floor(N.float() * w_t).long()
+            else:
+                N_t = N_s
+            N_s = torch.binomial(N_t.float(), w_s / w_t).long() #  torch.floor(N.float() * w_s).long()
             
             # Recover B_t from current x and predicted x0_hat
             delta = (x - x0_hat)  # (B, d)
@@ -310,162 +312,64 @@ def reverse_sampler_reflected_bd(
     lam0=8.0, lam1=8.0,
     use_mean=False,
     device="cuda",
-    return_trajectory=False
+    return_trajectory=False,
 ):
     """
-    Reverse sampler for the reflected birth–death bridge (λ₊=λ₋).
-
-    Args:
-      x1:   (B,d)  endpoint at t=1 (nonnegative)
-      z:    (B,d)  context (passed to model but not used here)
-      model: neural net with method `sample(x, t, z, use_mean)`
-             returning a Tensor (B,d) of predicted hat_x0.
-      n_steps: number of discretization steps K
-      lam0, lam1: birth=death rates at t=0 and t=1 (equal for +/-)
-      use_mean: if True, use deterministic prediction; else sample distribution
-      device: "cuda" or "cpu"
-      return_trajectory: if True, return list of all x_t
-    Returns:
-      x0:        (B,d)  final sample at t=0
-      trajectory: list of (B,d) states at each time step (only if return_trajectory)
+    Reflected BD bridge (λ_+ = λ_-).  Sample hidden signed bridge once,
+    then reflect at t=0.
     """
     B, d = x1.shape
-    x = x1.clone().to(device).long()  # current reflected state at t=1
-
-    # 1) Build time grid and λ(t_k), Λ(t_k)
-    t_grid = torch.linspace(0, 1, steps=n_steps, device=device)  # (K,)
-    lam_vals = lam0 + (lam1 - lam0) * t_grid                      # (K,)
+    x_ref = x1.clone().to(device).long()          # |X_1|
+    t_grid = torch.linspace(0, 1, n_steps, device=device)   # (K,)
+    # λ(t_k) linear
+    lam_vals = lam0 + (lam1 - lam0) * t_grid                  # (K,)
     dt = 1.0 / (n_steps - 1)
     lam_mid = 0.5 * (lam_vals[:-1] + lam_vals[1:])
     Lam = torch.zeros_like(lam_vals)
-    Lam[1:] = torch.cumsum(lam_mid * dt, dim=0)  # (K,)
-    Lambda1 = Lam[-1]                            # scalar
+    Lam[1:] = torch.cumsum(lam_mid * dt, 0)                   # Λ(t_k)
+    Λ1 = Lam[-1].item()
 
     if return_trajectory:
-        trajectory = [x.clone().cpu()]
+        traj = [x_ref.cpu()]
 
-    # 2) initial prediction of x0 at t=1
-    t1 = torch.ones(B, 1, device=device)  # (B,1)
-    x0_hat = model.sample(x.float(), z, t1, use_mean=use_mean).long()  # (B,d)
+    # ------------ latent variables at t=1 ------------
+    t1 = torch.ones(B, 1, device=device)
+    x0_hat = model.sample(x_ref.float(), z, t1, use_mean=use_mean).long()  # (B,d)
+    diff = (x_ref - x0_hat).abs()                         # |b-a|
+    M = torch.distributions.Poisson(2.0 * Λ1).sample(diff.shape).long().to(device)
+    N = diff + 2 * M                                      # (B,d)   total jumps
+    B1 = (N + (x_ref - x0_hat)) // 2                      # (B,d)   births
 
-    # 3) latent N,B1 at t=1
-    diff = (x - x0_hat).abs()                   # (B,d)
-    lam_star = 2.0 * Lambda1                    # scalar
-    M = torch.poisson(lam_star * torch.ones_like(diff, dtype=torch.float32)).long().to(device)  # (B,d)
-    N = diff + 2 * M                             # (B,d)
-    B1 = (N + (x - x0_hat)) // 2                  # (B,d)
+    # ---- choose hidden sign once with weight π₊(|X_1|) ----
+    #   With X_t = ±x_ref  ⇒  B1 already tells us which sign produced X_1
+    #   If diff>0 the parent must be + sign; if diff==0 choose ± equiprob.
+    # 1) decide sign ONCE ------------------------------------------
+    parent_pos = (torch.rand_like(diff, dtype=torch.float32) < 0.5)  # provisional
+    must_pos   = (diff % 2 == 1)        # if N is odd, sign is forced
+    parent_pos = torch.where(must_pos, torch.ones_like(parent_pos, dtype=torch.bool),
+                            parent_pos)
 
-    # 4) backward loop over k = K, K-1, …, 1
+    sign = torch.where(parent_pos, torch.tensor(1, device=device),
+                    torch.tensor(-1, device=device))            # (B,d)
+    X_signed = sign * x_ref                                        # keep this forever
+
+    # ------------ backward sweep ------------
     for k in range(n_steps - 1, 0, -1):
-        # 4a) compute N_t = floor(N * w(t_k)),  w(t_k)=Λ(t_k)/Λ(1)
-        w_k = (Lam[k] / Lambda1).clamp(0.0, 1.0)           # scalar
-        N_t = torch.floor(N.float() * w_k).long()          # (B,d)
+        w_t = (Lam[k] / Λ1).clamp(0.0, 1.0)
+        w_s = (Lam[k-1] / Λ1).clamp(0.0, 1.0)
+        N_t = torch.floor(N.float() * w_t).long()     # (B,d)
+        N_s = torch.floor(N.float() * w_s).long()     # (B,d)
 
-        # 4b) compute candidate signed‐parent births B_t^(+) and B_t^(-)
-        #     given observed |X_t| = x
-        #     a = x0_hat  (predicted "a" at this step)
-        a = x0_hat  # (B,d)
-        b_plus  = (N_t + (x - a)) // 2  # (B,d)
-        b_minus = (N_t - (x - a)) // 2  # (B,d)
-
-        # 4c) evaluate Hypergeom PMF at b_plus and b_minus (unnormalised)
-        #     h_plus = C(B1, b_plus) * C(N - B1, N_t - b_plus) / C(N, N_t)
-        #     h_minus = C(B1, b_minus) * C(N - B1, N_t - b_minus) / C(N, N_t)
-        # We only need the *ratio*, so denominator C(N,N_t) cancels.
-
-        # For numerical stability, compute in log-space:
-        # log_h = log C(B1, b) + log C(N - B1, N_t - b)
-        # where log C(n,k) = lgamma(n+1) - lgamma(k+1) - lgamma(n-k+1)
-        N_f  = N.float()
-        B1_f = B1.float()
-        Nt_f = N_t.float()
-
-        # clamp arguments to valid range before computing lgamma
-        b_plus_clamped  = torch.maximum(torch.zeros_like(b_plus), torch.minimum(b_plus, N))   # (B,d)
-        b_minus_clamped = torch.maximum(torch.zeros_like(b_minus), torch.minimum(b_minus, N))  # (B,d)
-
-        # log C(B1, b_plus)
-        logC1_plus  = (
-            torch.lgamma(B1_f + 1.0)
-            - torch.lgamma(b_plus_clamped.float() + 1.0)
-            - torch.lgamma((B1_f - b_plus_clamped.float()) + 1.0)
-        )
-        # log C(N - B1, N_t - b_plus)
-        logC2_plus  = (
-            torch.lgamma((N_f - B1_f) + 1.0)
-            - torch.lgamma((N_t.float() - b_plus_clamped.float()) + 1.0)
-            - torch.lgamma(((N_f - B1_f) - (N_t.float() - b_plus_clamped.float())) + 1.0)
-        )
-        log_h_plus = logC1_plus + logC2_plus  # (B,d)
-
-        # similarly for b_minus
-        logC1_minus = (
-            torch.lgamma(B1_f + 1.0)
-            - torch.lgamma(b_minus_clamped.float() + 1.0)
-            - torch.lgamma((B1_f - b_minus_clamped.float()) + 1.0)
-        )
-        logC2_minus = (
-            torch.lgamma((N_f - B1_f) + 1.0)
-            - torch.lgamma((N_t.float() - b_minus_clamped.float()) + 1.0)
-            - torch.lgamma(((N_f - B1_f) - (N_t.float() - b_minus_clamped.float())) + 1.0)
-        )
-        log_h_minus = logC1_minus + logC2_minus  # (B,d)
-
-        # 4d) compute π₊ = exp(log_h_plus) / [exp(log_h_plus) + exp(log_h_minus)]
-        #     do in a stable way:
-        max_log = torch.maximum(log_h_plus, log_h_minus)
-        h_plus_st = torch.exp(log_h_plus - max_log)
-        h_minus_st = torch.exp(log_h_minus - max_log)
-        pi_plus = h_plus_st / (h_plus_st + h_minus_st + 1e-16)  # (B,d)
-        # clamp to [0,1]
-        pi_plus = pi_plus.clamp(0.0, 1.0)
-
-        # 4e) sample a Bernoulli for each coordinate to choose ± sign
-        #     pos_mask=True => choose B_t = b_plus; else B_t=b_minus
-        rand_unif = torch.rand_like(pi_plus)
-        pos_mask = (rand_unif < pi_plus)  # (B,d), boolean
-
-        # 4f) recover the chosen B_t
-        B_t_choice = torch.where(pos_mask, b_plus, b_minus)  # (B,d)
-
-        # 4g) compute N_s = floor(N * w(s)), w(s) = Lam[k-1]/Lambda1
-        w_s = (Lam[k-1] / Lambda1).clamp(0.0, 1.0)
-        N_s = torch.floor(N.float() * w_s).long()  # (B,d)
-
-        # 4h) draw B_s ~ Hypergeom(N_t, B_t_choice, N_s) 
-        #     (i.e. among the N_t draws, exactly B_t_choice "successes",
-        #     then we draw N_s draws from those N_t without replacement)
+        B_t = (N_t + (X_signed - x0_hat)) // 2        # births at t_k   (B,d)
+        # sample births at s via Hypergeometric
         B_s_np = manual_hypergeometric(
-            total_count=N_t.cpu().numpy(),
-            num_successes=B_t_choice.cpu().numpy(),
-            num_draws=N_s.cpu().numpy()
-        )
+            N_t.cpu().numpy(), B_t.cpu().numpy(), N_s.cpu().numpy())
         B_s = torch.from_numpy(B_s_np).to(device)
 
-        # 4i) compute signed X_s = X_t_sign - 2*(B_t_choice - B_s) - (N_t - N_s)
-        #     where X_t_sign = (+x_t) if pos_mask else (-x_t)
-        sign_t = torch.where(pos_mask, +torch.ones_like(x), -torch.ones_like(x))  # (B,d)
-        X_t_signed = sign_t * x  # (B,d)
-        X_s_signed = X_t_signed - 2 * (B_t_choice - B_s) - (N_t - N_s)  # (B,d)
+        X_signed = X_signed - 2 * (B_t - B_s) - (N_t - N_s)   # signed X_s
 
-        # 4j) reflect to get non-negative x at time s
-        x = X_s_signed.abs().long()  # (B,d)
-
-        # 4k) update B1 = B_s for the next iteration
-        B1 = B_s
-
-        # optionally record trajectory
         if return_trajectory:
-            trajectory.append(x.clone().cpu())
+            traj.append(X_signed.abs().cpu())
 
-        # Note:  x0_hat remains unchanged (we do not re‐predict mid-trajectory).
-        #        We use the same predicted "a" = x0_hat throughout.
-        #        If you wish to re-predict at each step, uncomment:
-        #        if k > 1:
-        #            t_new = torch.full((B,1), t_grid[k-1], device=device)
-        #            x0_hat = model.sample(x.float(), z, t_new, use_mean=use_mean).long()
-
-    # End of for‐loop: x is now at t=0
-    if return_trajectory:
-        return x.long(), trajectory
-    return x.long() 
+    x0 = X_signed.abs().long()        # reflect at t=0
+    return (x0, traj) if return_trajectory else x0 

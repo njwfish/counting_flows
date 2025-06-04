@@ -242,8 +242,8 @@ def main():
             size=args.gen_samples,  # Total size
             d=args.data_dim,
             fixed_base=args.fixed_base,
-            batch_size=args.gen_samples,  # Generate one large batch
-            homogeneous=False,  # Different parameters per sample
+            batch_size=args.gen_samples * 10,  # Generate one large batch
+            homogeneous=True,  # Different parameters per sample
             **{k: v for k, v in vars(train_dataset).items() 
                if k not in ['size', 'd', 'fixed_base', 'batch_size', 'homogeneous', 'base_params']}
         )
