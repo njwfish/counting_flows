@@ -55,7 +55,7 @@ def manual_hypergeometric(total_count, num_successes, num_draws):
 class PoissonBridgeCollate:
     """Collate function for Poisson bridge sampling with time scheduling"""
     
-    def __init__(self, n_steps, time_schedule="uniform", homogeneous_time=False, **schedule_kwargs):
+    def __init__(self, n_steps, time_schedule="uniform", homogeneous_time=True, **schedule_kwargs):
         """
         Args:
             n_steps: Number of diffusion steps
@@ -134,7 +134,7 @@ class NBBridgeCollate:
     """Collate function for Negative Binomial (Polya) bridge sampling with time scheduling"""
     
     def __init__(self, n_steps, r_min=1.0, r_max=20.0, r_schedule="linear", 
-                 time_schedule="uniform", homogeneous_time=False, **schedule_kwargs):
+                 time_schedule="uniform", homogeneous_time=True, **schedule_kwargs):
         """
         Args:
             n_steps: Number of diffusion steps
@@ -235,7 +235,7 @@ class PoissonBDBridgeCollate:
         lam_m1: float = 8.0,
         schedule_type: str = "constant",
         time_schedule: str = "uniform",
-        homogeneous_time: bool = False,
+        homogeneous_time: bool = True,
         **schedule_kwargs,
     ):
         self.n_steps = n_steps
@@ -358,7 +358,7 @@ class PolyaBDBridgeCollate:
         lam_m1: float = 8.0,
         schedule_type: str = "constant",
         time_schedule: str = "uniform",
-        homogeneous_time: bool = False,
+        homogeneous_time: bool = True,
         **schedule_kwargs,
     ):
         self.n_steps = n_steps
@@ -476,7 +476,7 @@ class ReflectedBDBridgeCollate:
         lam0: float = 8.0,
         lam1: float = 8.0,
         time_schedule: str = "uniform",
-        homogeneous_time: bool = False,
+        homogeneous_time: bool = True,
         **schedule_kwargs,
     ):
         """

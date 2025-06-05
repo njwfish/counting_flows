@@ -45,6 +45,7 @@ def train_model(
         x_t = batch['x_t'].to(device) 
         z = batch['z'].to(device)
         t = batch['t'].to(device).unsqueeze(-1)  # Add dimension for broadcasting
+
         
         # Training step
         optimizer.zero_grad()

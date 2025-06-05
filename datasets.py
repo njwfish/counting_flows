@@ -20,7 +20,7 @@ from abc import ABC, abstractmethod
 class BaseCountDataset(Dataset, ABC):
     """Base class for count flow datasets"""
     
-    def __init__(self, size, d, fixed_base=False, batch_size=None, homogeneous=False):
+    def __init__(self, size, d, fixed_base=False, batch_size=None, homogeneous=True):
         """
         Args:
             size: Dataset size (number of samples per epoch)
@@ -56,15 +56,21 @@ class BaseCountDataset(Dataset, ABC):
                 'z': z.float()
             }
     
-    def _generate_batch(self, batch_size, homogeneous=False):
+    def _generate_batch(self, batch_size, homogeneous=True):
         """Generate a batch of endpoint pairs"""
         if homogeneous:
-            # Generate one set of parameters and repeat for the batch
-            x0_single, x1_single, z_single = self._generate_endpoints()
+            # Generate one set of parameters and use them to sample multiple different endpoints
+            z = self._sample_parameters()
             
-            x0_batch = x0_single.unsqueeze(0).repeat(batch_size, 1)
-            x1_batch = x1_single.unsqueeze(0).repeat(batch_size, 1)
-            z_batch = z_single.unsqueeze(0).repeat(batch_size, 1)
+            x0_list, x1_list = [], []
+            for _ in range(batch_size):
+                x0, x1 = self._sample_from_parameters(z)
+                x0_list.append(x0)
+                x1_list.append(x1)
+            
+            x0_batch = torch.stack(x0_list)
+            x1_batch = torch.stack(x1_list)
+            z_batch = z.unsqueeze(0).repeat(batch_size, 1)
         else:
             # Generate different parameters for each sample
             x0_list, x1_list, z_list = [], [], []
@@ -98,6 +104,16 @@ class BaseCountDataset(Dataset, ABC):
     def get_context_dim(self):
         """Return context dimension for this dataset"""
         pass
+    
+    @abstractmethod
+    def _sample_parameters(self):
+        """Sample conditioning parameters z for homogeneous batches"""
+        pass
+    
+    @abstractmethod
+    def _sample_from_parameters(self, z):
+        """Sample x0, x1 from given parameters z"""
+        pass
 
 
 class PoissonDataset(BaseCountDataset):
@@ -109,7 +125,7 @@ class PoissonDataset(BaseCountDataset):
     """
     
     def __init__(self, size, d, lam_scale=50.0, fixed_base=False, fixed_lam=10.0, 
-                 batch_size=None, homogeneous=False):
+                 batch_size=None, homogeneous=True):
         self.lam_scale = lam_scale
         self.fixed_lam = fixed_lam
         super().__init__(size, d, fixed_base, batch_size, homogeneous)
@@ -121,8 +137,8 @@ class PoissonDataset(BaseCountDataset):
     def _generate_endpoints(self):
         if self.fixed_base:
             # Fixed λ₀, random λ₁
-            lam0 = self.base_params
-            lam1 = self.lam_scale * torch.rand(self.d)
+            lam1 = self.base_params
+            lam0 = self.lam_scale * torch.rand(self.d)
         else:
             # Both random
             lam0 = self.lam_scale * torch.rand(self.d)
@@ -139,6 +155,32 @@ class PoissonDataset(BaseCountDataset):
     
     def get_context_dim(self):
         return self.d * 2  # [lam0, lam1]
+    
+    def _sample_parameters(self):
+        """Sample lambda parameters for homogeneous batches"""
+        if self.fixed_base:
+            # Fixed λ₀, random λ₁
+            lam1 = self.base_params
+            lam0 = self.lam_scale * torch.rand(self.d)
+        else:
+            # Both random
+            lam0 = self.lam_scale * torch.rand(self.d)
+            lam1 = self.lam_scale * torch.rand(self.d)
+        
+        # Return conditioning parameters
+        return torch.cat([lam0, lam1], dim=0)
+    
+    def _sample_from_parameters(self, z):
+        """Sample x0, x1 from given lambda parameters"""
+        # Split z back into lam0 and lam1
+        lam0 = z[:self.d]
+        lam1 = z[self.d:]
+        
+        # Sample endpoints using these fixed parameters
+        x0 = Poisson(lam0).sample()
+        x1 = Poisson(lam1).sample()
+        
+        return x0, x1
 
 
 class BetaBinomialDataset(BaseCountDataset):
@@ -153,7 +195,7 @@ class BetaBinomialDataset(BaseCountDataset):
     
     def __init__(self, size, d, n_scale=50, alpha_range=(0.1, 2.0), beta_range=(0.1, 2.0), 
                  fixed_base=False, fixed_n=50, fixed_alpha=0.5, fixed_beta=0.5,
-                 batch_size=None, homogeneous=False):
+                 batch_size=None, homogeneous=True):
         self.n_scale = n_scale
         self.alpha_range = alpha_range
         self.beta_range = beta_range
@@ -209,6 +251,39 @@ class BetaBinomialDataset(BaseCountDataset):
     
     def get_context_dim(self):
         return self.d * 6  # [n0, alpha0, beta0, n1, alpha1, beta1]
+    
+    def _sample_parameters(self):
+        """Sample BetaBinomial parameters for homogeneous batches"""
+        if self.fixed_base:
+            # Fixed parameters for x₀
+            n1 = self.base_params['n']
+            alpha1 = self.base_params['alpha']
+            beta1 = self.base_params['beta']
+            # Random parameters for x₁
+            n0, alpha0, beta0 = self._sample_bb_params()
+        else:
+            # Both random
+            n0, alpha0, beta0 = self._sample_bb_params()
+            n1, alpha1, beta1 = self._sample_bb_params()
+        
+        # Return conditioning parameters
+        return torch.cat([n0, alpha0, beta0, n1, alpha1, beta1], dim=0)
+    
+    def _sample_from_parameters(self, z):
+        """Sample x0, x1 from given BetaBinomial parameters"""
+        # Split z back into parameter components
+        n0 = z[:self.d]
+        alpha0 = z[self.d:2*self.d]
+        beta0 = z[2*self.d:3*self.d]
+        n1 = z[3*self.d:4*self.d]
+        alpha1 = z[4*self.d:5*self.d]
+        beta1 = z[5*self.d:6*self.d]
+        
+        # Sample endpoints using these fixed parameters
+        x0 = self._sample_betabinomial(n0, alpha0, beta0)
+        x1 = self._sample_betabinomial(n1, alpha1, beta1)
+        
+        return x0, x1
 
 
 def create_dataset(dataset_type, **kwargs):

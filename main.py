@@ -322,6 +322,7 @@ def main():
 
         # Plot reverse trajectory
         fig = plot_reverse_trajectory(
+            x0_target,
             x1_batch, z_batch, model, 
             K=args.steps, 
             mode=sample_bridge_mode, 

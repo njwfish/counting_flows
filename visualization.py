@@ -114,7 +114,7 @@ def plot_time_spacing_comparison(K=50, title="Time Spacing Comparison"):
     return fig
 
 
-def plot_reverse_trajectory(x1, z, model, K=30, mode="poisson", device="cuda", n_trajectories=5, 
+def plot_reverse_trajectory(x0, x1, z, model, K=30, mode="poisson", device="cuda", n_trajectories=5, 
                            r_min=1.0, r_max=20.0, r_schedule="linear", time_schedule="uniform", 
                            bd_r=1.0, bd_beta=1.0, lam_p0=8.0, lam_p1=8.0, lam_m0=8.0, lam_m1=8.0, 
                            bd_schedule_type="constant", lam0=8.0, lam1=8.0, **schedule_kwargs):
@@ -187,7 +187,7 @@ def plot_reverse_trajectory(x1, z, model, K=30, mode="poisson", device="cuda", n
         
         # Plot linear interpolant reference (dotted black line)
         x1_val = x1[0, dim].cpu().numpy()
-        x0_mean = np.mean([traj[-1, dim] for traj in trajectories])  # Average final point
+        x0_mean = x0[0, dim].cpu().numpy()  # Average final point
         linear_interp = np.linspace(x1_val, x0_mean, len(time_np))
         ax.plot(time_np, linear_interp, 'k--', alpha=0.5, linewidth=2, label='Linear interpolant')
         
