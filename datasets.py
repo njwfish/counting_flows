@@ -89,12 +89,7 @@ class BaseCountDataset(Dataset, ABC):
             'x1': x1_batch.long(),
             'z': z_batch.float()
         }
-    
-    @abstractmethod
-    def _generate_endpoints(self):
-        """Generate x0, x1, z for this dataset type"""
-        pass
-    
+
     @abstractmethod
     def _generate_fixed_base(self):
         """Generate fixed base measure parameters"""
@@ -133,25 +128,6 @@ class PoissonDataset(BaseCountDataset):
     def _generate_fixed_base(self):
         """Generate fixed λ₀ for all samples"""
         return torch.full((self.d,), self.fixed_lam, dtype=torch.float32)
-    
-    def _generate_endpoints(self):
-        if self.fixed_base:
-            # Fixed λ₀, random λ₁
-            lam1 = self.base_params
-            lam0 = self.lam_scale * torch.rand(self.d)
-        else:
-            # Both random
-            lam0 = self.lam_scale * torch.rand(self.d)
-            lam1 = self.lam_scale * torch.rand(self.d)
-        
-        # Sample endpoints
-        x0 = Poisson(lam0).sample()
-        x1 = Poisson(lam1).sample()
-        
-        # Conditioning includes both λ values
-        z = torch.cat([lam0, lam1], dim=0)
-        
-        return x0, x1, z
     
     def get_context_dim(self):
         return self.d * 2  # [lam0, lam1]
@@ -227,27 +203,6 @@ class BetaBinomialDataset(BaseCountDataset):
         x = Binomial(total_count=n.long(), probs=p).sample()
         return x
     
-    def _generate_endpoints(self):
-        if self.fixed_base:
-            # Fixed parameters for x₀
-            n1 = self.base_params['n']
-            alpha1 = self.base_params['alpha']
-            beta1 = self.base_params['beta']
-            # Random parameters for x₁
-            n0, alpha0, beta0 = self._sample_bb_params()
-        else:
-            # Both random
-            n0, alpha0, beta0 = self._sample_bb_params()
-            n1, alpha1, beta1 = self._sample_bb_params()
-        
-        # Sample endpoints
-        x0 = self._sample_betabinomial(n0, alpha0, beta0)
-        x1 = self._sample_betabinomial(n1, alpha1, beta1)
-        
-        # Conditioning includes all parameters
-        z = torch.cat([n0, alpha0, beta0, n1, alpha1, beta1], dim=0)
-        
-        return x0, x1, z
     
     def get_context_dim(self):
         return self.d * 6  # [n0, alpha0, beta0, n1, alpha1, beta1]

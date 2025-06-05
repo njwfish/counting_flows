@@ -127,6 +127,7 @@ def reverse_sampler(
         
         # Use unified sampling interface
         x0_hat = model.sample(x, z, t, use_mean=use_mean).float()
+        print(x0_hat, z)
         
         if mode in ["poisson_bd", "polya_bd"]:
             # Birth-death bridge sampling
