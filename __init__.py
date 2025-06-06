@@ -6,10 +6,7 @@ Poisson and Negative Binomial bridges.
 """
 
 from .models import NBPosterior, BetaBinomialPosterior, MLERegressor, ZeroInflatedPoissonPosterior
-from .datasets import (
-    PoissonDataset, BetaBinomialDataset, PoissonBridgeCollate, NBBridgeCollate, 
-    create_dataloader, InfiniteDataLoader
-)
+from .datasets import PoissonDataset, BetaBinomialDataset, create_dataloader, InfiniteDataLoader
 from .samplers import reverse_sampler
 from .training import train_model, create_training_dataloader
 from .scheduling import make_time_spacing_schedule

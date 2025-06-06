@@ -132,74 +132,88 @@ def plot_reverse_trajectory(x0, x1, z, model, K=30, mode="poisson", device="cuda
         time_points = make_time_spacing_schedule(K, time_schedule, **schedule_kwargs)
         time_points = torch.flip(time_points, [0])  # Reverse for backward process
     
-    trajectories = []
+    # Batch the sampling by stacking inputs
+    x_start_batch = x1[:n_trajectories].clone().to(device)  # Take first n_trajectories samples
+    z_start_batch = z[:n_trajectories].clone().to(device) if len(z) >= n_trajectories else z[:1].repeat(n_trajectories, 1).to(device)
     
-    for traj in range(n_trajectories):
-        # Use the actual reverse sampler to get full trajectory
-        x_start = x1[:1].clone().to(device)  # Single sample
-        z_start = z[:1].clone().to(device)
-        
-        # Get the full reverse trajectory with intermediate steps
-        x_final, trajectory = reverse_sampler(
-            x_start, z_start, model,
-            K=K, mode=mode, device=device,
-            r_min=r_min, r_max=r_max,
-            r_schedule=r_schedule, time_schedule=time_schedule,
-            # BD-specific parameters
-            bd_r=bd_r, bd_beta=bd_beta,
-            lam_p0=lam_p0, lam_p1=lam_p1, lam_m0=lam_m0, lam_m1=lam_m1,
-            bd_schedule_type=bd_schedule_type,
-            # Reflected BD parameters
-            lam0=lam0, lam1=lam1,
-            return_trajectory=True,
-            **schedule_kwargs
-        )
-        
-        # Convert trajectory to numpy array for plotting
-        # trajectory is a list of tensors, each of shape [1, d]
-        traj_array = np.array([step[0].numpy() for step in trajectory])  # Shape: [K+1, d]
-        
-        trajectories.append(traj_array)
+    # Ensure we have enough samples
+    if len(x_start_batch) < n_trajectories:
+        # Repeat samples if we don't have enough
+        repeats = (n_trajectories + len(x_start_batch) - 1) // len(x_start_batch)
+        x_start_batch = x_start_batch.repeat(repeats, 1)[:n_trajectories]
+        if len(z_start_batch) < n_trajectories:
+            z_start_batch = z_start_batch.repeat(repeats, 1)[:n_trajectories]
+    
+    # Get the full reverse trajectory with intermediate steps (batched)
+    x_final, trajectory, x_hat_trajectory = reverse_sampler(
+        x_start_batch, z_start_batch, model,
+        K=K, mode=mode, device=device,
+        r_min=r_min, r_max=r_max,
+        r_schedule=r_schedule, time_schedule=time_schedule,
+        # BD-specific parameters
+        bd_r=bd_r, bd_beta=bd_beta,
+        lam_p0=lam_p0, lam_p1=lam_p1, lam_m0=lam_m0, lam_m1=lam_m1,
+        bd_schedule_type=bd_schedule_type,
+        # Reflected BD parameters
+        lam0=lam0, lam1=lam1,
+        return_trajectory=True,
+        return_x_hat=True,
+        **schedule_kwargs
+    )
+    
+    # Convert trajectories to numpy arrays for plotting
+    # trajectory is a list of tensors, each of shape [n_trajectories, d]
+    traj_array = np.array([step.numpy() for step in trajectory])  # Shape: [K+1, n_trajectories, d]
+    x_hat_array = np.array([step.numpy() for step in x_hat_trajectory])  # Shape: [K, n_trajectories, d]
     
     # Convert time points to numpy for plotting
-    # Make sure time_points matches trajectory length
     time_np = time_points.numpy()
     
-    # Ensure trajectory and time points have same length
-    if trajectories:
-        traj_length = len(trajectories[0])
-        time_length = len(time_np)
-        
-        print(f"Debug: trajectory length = {traj_length}, time length = {time_length}")
-        
-        # Use the minimum length to avoid index errors
-        min_length = min(time_length, traj_length)
-        if min_length > 0:
-            time_np = time_np[:min_length]
-            trajectories = [traj[:min_length] for traj in trajectories]
-        else:
-            print("Warning: Empty trajectories or time points")
-            return fig
+    # Ensure trajectory and time points have compatible lengths
+    traj_length = len(traj_array)
+    x_hat_length = len(x_hat_array)
+    time_length = len(time_np)
+    
+    print(f"Debug: trajectory length = {traj_length}, x_hat length = {x_hat_length}, time length = {time_length}")
+    
+    # Use the minimum length to avoid index errors
+    min_length = min(time_length, traj_length)
+    if min_length > 0:
+        time_np = time_np[:min_length]
+        traj_array = traj_array[:min_length]
+        # x_hat is one step shorter (no prediction at final step)
+        x_hat_time_np = time_np[:-1] if len(time_np) > 1 else time_np
+        x_hat_array = x_hat_array[:len(x_hat_time_np)]
+    else:
+        print("Warning: Empty trajectories or time points")
+        return fig
     
     # Plot trajectories for each dimension
     for dim in range(min(4, x1.shape[1])):
         ax = axes[dim//2, dim%2]
         
         # Plot linear interpolant reference (dotted black line)
-        x1_val = x1[0, dim].cpu().numpy()
-        x0_mean = x0[0, dim].cpu().numpy()  # Average final point
+        x1_val = x_start_batch[0, dim].cpu().numpy()
+        x0_mean = x_final[0, dim].cpu().numpy()  # Final point for first trajectory
         linear_interp = np.linspace(x1_val, x0_mean, len(time_np))
         ax.plot(time_np, linear_interp, 'k--', alpha=0.5, linewidth=2, label='Linear interpolant')
         
-        # Plot actual trajectories
-        for traj in trajectories:
-            ax.plot(time_np, traj[:, dim], 'o-', alpha=0.7, linewidth=2, markersize=4)
+        # Plot actual trajectories (x values)
+        for traj_idx in range(n_trajectories):
+            ax.plot(time_np, traj_array[:, traj_idx, dim], 'o-', alpha=0.7, linewidth=2, 
+                   markersize=4, label=f'Trajectory {traj_idx+1}' if traj_idx < 3 else "")
+        
+        # Plot x_hat predictions (smaller markers, different style)
+        for traj_idx in range(min(3, n_trajectories)):  # Only show first 3 to avoid clutter
+            ax.plot(x_hat_time_np, x_hat_array[:, traj_idx, dim], 's--', alpha=0.5, linewidth=1, 
+                   markersize=3, label=f'x̂₀ pred {traj_idx+1}' if traj_idx < 3 else "")
         
         ax.set_title(f'Dimension {dim}')
         ax.set_xlabel('Time t')
         ax.set_ylabel('Count value')
         ax.grid(True, alpha=0.3)
-        ax.legend()
+        if dim == 0:  # Only show legend for first plot to avoid clutter
+            ax.legend(fontsize='small', loc='best')
         
         # Invert x-axis since we're going backwards in time (t=1 → t=0)
         ax.invert_xaxis()

@@ -13,7 +13,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.distributions import Poisson, Binomial, Beta
 import numpy as np
-from .bridges import PoissonBridgeCollate, NBBridgeCollate, PoissonBDBridgeCollate, PolyaBDBridgeCollate, ReflectedBDBridgeCollate
+from .bridges import PoissonBDBridgeCollate, PolyaBDBridgeCollate
 from abc import ABC, abstractmethod
 
 
@@ -46,15 +46,8 @@ class BaseCountDataset(Dataset, ABC):
     
     def __getitem__(self, idx):
         """Generate endpoint pair or batch"""
-        if self.batch_size is not None:
-            return self._generate_batch(self.batch_size, self.homogeneous)
-        else:
-            x0, x1, z = self._generate_endpoints()
-            return {
-                'x0': x0.long(),
-                'x1': x1.long(),
-                'z': z.float()
-            }
+        return self._generate_batch(self.batch_size, self.homogeneous)
+
     
     def _generate_batch(self, batch_size, homogeneous=True):
         """Generate a batch of endpoint pairs"""
@@ -84,6 +77,8 @@ class BaseCountDataset(Dataset, ABC):
             x1_batch = torch.stack(x1_list)
             z_batch = torch.stack(z_list)
         
+        
+
         return {
             'x0': x0_batch.long(),
             'x1': x1_batch.long(),

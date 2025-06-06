@@ -6,6 +6,7 @@ Provides different neural architectures for predicting count distributions:
 - BetaBinomialPosterior: Beta-Binomial parameters (n, alpha, beta)  
 - MLERegressor: Direct count prediction via log(1 + x₀)
 - ZeroInflatedPoissonPosterior: Zero-Inflated Poisson parameters (λ, π)
+- IQNPosterior: Implicit Quantile Networks for count prediction
 """
 
 import torch
@@ -13,6 +14,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import NegativeBinomial, Beta
 from abc import ABC, abstractmethod
+import math
 
 class BetaBinomial:
     def __init__(self, total_count, concentration1, concentration0):
@@ -29,7 +31,7 @@ class BetaBinomial:
     
     def log_prob(self, value):
         # Beta-binomial log-likelihood
-        n = self.total_count
+        n = torch.tensor(self.total_count)
         alpha = self.concentration1  
         beta = self.concentration0
         k = value
@@ -133,28 +135,27 @@ class BetaBinomialPosterior(BaseCountModel):
     
     @property
     def output_dim(self):
-        return 3 * self.x_dim  # (log_n, logit_mean_p, log_concentration)
+        return 2 * self.x_dim  # (log_n, logit_mean_p, log_concentration)
     
     def process_output(self, h):
-        log_n, logit_mean_p, log_concentration = h.chunk(3, dim=-1)
+        logit_mean_p, log_concentration = h.chunk(2, dim=-1)
         
         # Force n to be much larger to avoid artificial ceiling
-        n = F.softplus(log_n) + 10.0                          # Start much higher (at least 50)
-        mean_p = torch.sigmoid(logit_mean_p).clamp(0.001, 0.999) # Keep away from extremes
-        concentration = F.softplus(log_concentration) + 1.0    # Higher concentration for stability
+        mean_p = torch.sigmoid(logit_mean_p).clamp(0.0001, 0.9999) # Keep away from extremes
+        concentration = F.softplus(log_concentration) 
         
         # Convert to alpha, beta with minimum values
-        alpha = mean_p * concentration                    # At least 0.5
-        beta = (1 - mean_p) * concentration               # At least 0.5
+        alpha = mean_p * concentration                    
+        beta = (1 - mean_p) * concentration  
         
-        return n, alpha, beta
+        return 100, alpha, beta
     
     def sample(self, x_t, z, t, use_mean=False):
         """Sample from predicted Beta-Binomial distribution"""
         n, alpha, beta = self.forward(x_t, z, t)
         # Convert to integers for total_count, but keep it large
-        n_int = n.round().long().clamp(min=10, max=500)  # Reasonable large bounds
-        dist = BetaBinomial(total_count=n_int, concentration1=alpha, concentration0=beta)
+        # n_int = n.round().long().clamp(min=10, max=500)  # Reasonable large bounds
+        dist = BetaBinomial(total_count=n, concentration1=alpha, concentration0=beta)
         if use_mean:
             return dist.mean.round().long()
         else:
@@ -163,30 +164,20 @@ class BetaBinomialPosterior(BaseCountModel):
     def loss(self, x0_true, x_t, z, t):
         """Negative log-likelihood under predicted Beta-Binomial with regularization"""
         n, alpha, beta = self.forward(x_t, z, t)
-        
-        # Ensure n is always larger than observed counts + some buffer
-        max_observed = x0_true.max().item()
-        n_min_needed = max_observed + 10.0  # Buffer of 10
-        
-        # Add penalty if n is too small (encourages larger n)
-        n_penalty = F.relu(n_min_needed - n).mean() * 5.0
+    
         
         # Also add penalty if mean_p * n is too different from observed counts
-        predicted_mean = n * alpha / (alpha + beta)
-        mean_penalty = F.mse_loss(predicted_mean, x0_true.float()) * 0.5
+        # predicted_mean = n * alpha / (alpha + beta)
+        # mean_penalty = F.mse_loss(predicted_mean, x0_true.float()) * 0.5
         
         # Convert to integers for likelihood calculation
-        n_int = n.round().long().clamp(min=int(n_min_needed), max=500)
+        # n_int = n.round().long().clamp(min=int(n_min_needed), max=500)
         
         # Don't clamp x0_true since we ensure n is large enough
-        try:
-            dist = BetaBinomial(total_count=n_int, concentration1=alpha, concentration0=beta)
-            nll = -(dist.log_prob(x0_true.float())).sum(-1).mean()
-        except:
-            # Fallback to MSE if beta-binomial fails
-            nll = F.mse_loss(predicted_mean, x0_true.float())
+        dist = BetaBinomial(total_count=n, concentration1=alpha, concentration0=beta)
+        nll = -(dist.log_prob(x0_true.float())).sum(-1).mean()
         
-        return nll + n_penalty + mean_penalty
+        return nll # + n_penalty + mean_penalty
 
 
 class MLERegressor(BaseCountModel):
@@ -203,15 +194,13 @@ class MLERegressor(BaseCountModel):
     
     def sample(self, x_t, z, t, use_mean=False):
         """Round predicted log values to get integer counts"""
-        log_x0_plus1 = self.forward(x_t, z, t)
-        x0_hat = torch.exp(log_x0_plus1) - 1
-        return x0_hat.clamp(min=0).round().long()
+        x0_hat = self.forward(x_t, z, t)
+        return x0_hat.round().long()
     
     def loss(self, x0_true, x_t, z, t):
         """MSE loss on log(1 + x) scale"""
-        log_x0_plus1_pred = self.forward(x_t, z, t)
-        log_x0_plus1_true = torch.log(x0_true.float() + 1)
-        return F.mse_loss(log_x0_plus1_pred, log_x0_plus1_true)
+        x0_hat = self.forward(x_t, z, t)
+        return F.mse_loss(x0_hat, x0_true.float())
 
 
 class ZeroInflatedPoissonPosterior(BaseCountModel):
@@ -267,3 +256,151 @@ class ZeroInflatedPoissonPosterior(BaseCountModel):
         log_prob = zero_mask * log_prob_zero + nonzero_mask * log_prob_nonzero
         
         return -log_prob.sum(-1).mean() 
+
+
+class IQNPosterior(BaseCountModel):
+    """
+    Implicit Quantile Networks approach: f_θ(x_t, t, z, τ) → quantile values
+    Learns to predict quantiles of the count distribution directly
+    """
+    
+    def __init__(self, x_dim, context_dim, hidden=128, n_quantiles=32, quantile_embedding_dim=64):
+        # Initialize the base class first, but we'll override the network
+        super().__init__(x_dim, context_dim, hidden)
+        
+        self.n_quantiles = n_quantiles
+        self.quantile_embedding_dim = quantile_embedding_dim
+        
+        # Override the network to handle quantile embeddings
+        self.feature_net = nn.Sequential(
+            nn.Linear(x_dim + 1 + context_dim, hidden),
+            nn.SELU(),
+            nn.Linear(hidden, hidden),
+            nn.SELU(),
+        )
+        
+        # Quantile embedding network (cosine embedding like in IQN paper)
+        self.quantile_embedding = nn.Linear(quantile_embedding_dim, hidden)
+        
+        # Final output layer
+        self.output_layer = nn.Sequential(
+            nn.Linear(hidden, hidden),
+            nn.SELU(),
+            nn.Linear(hidden, self.x_dim)
+        )
+    
+    @property
+    def output_dim(self):
+        return self.x_dim  # Direct quantile values
+    
+    def _get_quantile_embedding(self, tau):
+        """
+        Generate cosine embeddings for quantile levels τ
+        tau: [batch_size, n_quantiles] or [batch_size, 1]
+        """
+        batch_size = tau.shape[0]
+        n_tau = tau.shape[1]
+        
+        # Cosine embedding as in IQN paper
+        i = torch.arange(1, self.quantile_embedding_dim + 1, 
+                        dtype=torch.float32, device=tau.device).unsqueeze(0).unsqueeze(0)
+        # Shape: [1, 1, quantile_embedding_dim]
+        
+        tau_expanded = tau.unsqueeze(-1)  # [batch_size, n_tau, 1]
+        
+        # Compute cosine embeddings
+        embeddings = torch.cos(math.pi * i * tau_expanded)  # [batch_size, n_tau, embedding_dim]
+        
+        return self.quantile_embedding(embeddings)  # [batch_size, n_tau, hidden]
+    
+    def forward_with_quantiles(self, x_t, z, t, tau):
+        """
+        Forward pass with explicit quantile levels
+        tau: [batch_size, n_quantiles] quantile levels in [0, 1]
+        """
+        # Get basic features
+        t = t.expand_as(x_t[:, :1])
+        inp = torch.cat([x_t.float(), t.float(), z.float()], dim=-1)
+        features = self.feature_net(inp)  # [batch_size, hidden]
+        
+        # Get quantile embeddings
+        quantile_emb = self._get_quantile_embedding(tau)  # [batch_size, n_quantiles, hidden]
+        
+        # Combine features with quantile embeddings
+        batch_size, n_tau = tau.shape
+        features_expanded = features.unsqueeze(1).expand(-1, n_tau, -1)  # [batch_size, n_quantiles, hidden]
+        
+        # Element-wise multiplication (Hadamard product)
+        combined = features_expanded * quantile_emb  # [batch_size, n_quantiles, hidden]
+        
+        # Get quantile predictions
+        quantiles = self.output_layer(combined)  # [batch_size, n_quantiles, x_dim]
+        
+        return quantiles
+    
+    def process_output(self, h):
+        # This method is required by base class but not used in IQN
+        return h
+    
+    def forward(self, x_t, z, t):
+        """
+        Standard forward pass - sample random quantiles for training
+        """
+        batch_size = x_t.shape[0]
+        
+        # Sample random quantile levels
+        tau = torch.rand(batch_size, self.n_quantiles, device=x_t.device)
+        
+        return self.forward_with_quantiles(x_t, z, t, tau)
+    
+    def sample(self, x_t, z, t, use_mean=False, n_samples=1):
+        """
+        Sample from predicted quantile distribution
+        """
+        batch_size = x_t.shape[0]
+        
+        if use_mean:
+            # Use median (0.5 quantile) as point estimate
+            tau = torch.full((batch_size, 1), 0.5, device=x_t.device)
+            quantiles = self.forward_with_quantiles(x_t, z, t, tau)
+            return quantiles.squeeze(1).round().long()
+        else:
+            # Sample random quantiles and interpolate
+            tau = torch.rand(batch_size, n_samples, device=x_t.device)
+            quantiles = self.forward_with_quantiles(x_t, z, t, tau)
+            
+            # For multiple samples, take one random sample per batch element
+            if n_samples > 1:
+                sample_idx = torch.randint(0, n_samples, (batch_size,), device=x_t.device)
+                quantiles = quantiles[torch.arange(batch_size), sample_idx]
+            else:
+                quantiles = quantiles.squeeze(1)
+                
+            return quantiles.round().long()
+    
+    def loss(self, x0_true, x_t, z, t):
+        """
+        Quantile regression loss (Huber loss weighted by quantile levels)
+        """
+        batch_size = x_t.shape[0]
+        
+        # Sample random quantiles for training
+        tau = torch.rand(batch_size, self.n_quantiles, device=x_t.device)
+        
+        # Get quantile predictions
+        quantiles = self.forward_with_quantiles(x_t, z, t, tau)  # [batch_size, n_quantiles, x_dim]
+        
+        # Expand true values for comparison
+        x0_expanded = x0_true.float().unsqueeze(1).expand(-1, self.n_quantiles, -1)  # [batch_size, n_quantiles, x_dim]
+        tau_expanded = tau.unsqueeze(-1).expand(-1, -1, self.x_dim)  # [batch_size, n_quantiles, x_dim]
+        
+        # Compute quantile regression loss
+        errors = x0_expanded - quantiles  # [batch_size, n_quantiles, x_dim]
+        
+        # Quantile loss: τ * max(errors, 0) + (1-τ) * max(-errors, 0)
+        loss_positive = tau_expanded * F.relu(errors)
+        loss_negative = (1 - tau_expanded) * F.relu(-errors)
+        quantile_loss = loss_positive + loss_negative
+        
+        # Average over quantiles and sum over dimensions, then mean over batch
+        return quantile_loss.mean(dim=1).sum(dim=1).mean() 

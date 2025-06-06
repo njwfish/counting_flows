@@ -21,6 +21,7 @@ def reverse_sampler(
     use_mean=False,
     device="cuda",
     return_trajectory=False,
+    return_x_hat=False,
     # BD-specific parameters
     bd_r=1.0,
     bd_beta=1.0,
@@ -29,9 +30,6 @@ def reverse_sampler(
     lam_m0=8.0,
     lam_m1=8.0,
     bd_schedule_type="constant",
-    # Reflected BD parameters
-    lam0=8.0,
-    lam1=8.0,
     **schedule_kwargs
 ):
     """
@@ -49,6 +47,7 @@ def reverse_sampler(
         use_mean: Whether to use mean predictions instead of sampling
         device: Device for computation
         return_trajectory: Whether to return intermediate steps (for visualization)
+        return_x_hat: Whether to return x0_hat predictions at each step (when return_trajectory=True)
         bd_r, bd_beta: Parameters for Polya BD bridge
         lam_p0, lam_p1, lam_m0, lam_m1: Birth/death rates for BD bridges
         bd_schedule_type: How lambda rates change over time for BD
@@ -58,42 +57,23 @@ def reverse_sampler(
     Returns:
         x0: Generated samples at time t=0
         trajectory: List of intermediate x values (if return_trajectory=True)
+        x_hat_trajectory: List of x0_hat predictions at each step (if return_trajectory=True and return_x_hat=True)
     """
-    # Handle reflected BD bridge separately
-    if mode == "reflected_bd":
-        return reverse_sampler_reflected_bd(
-            x1, z, model,
-            n_steps=K,
-            lam0=lam0,
-            lam1=lam1,
-            use_mean=use_mean,
-            device=device,
-            return_trajectory=return_trajectory
-        )
     
     x = x1.clone().to(device).float()
     
     # Initialize trajectory storage if requested
     if return_trajectory:
         trajectory = [x.clone().cpu()]
+        if return_x_hat:
+            x_hat_trajectory = []
     
-    # Create schedules based on mode
-    if mode == "nb":
-        phi_sched, R = make_phi_schedule(K, phi_min=0.0, phi_max=r_max, schedule_type=r_schedule, **schedule_kwargs)
-        phi_sched = phi_sched.to(device)
-        R = R.to(device)
-        # Get time points (always use make_time_spacing_schedule)
-        time_points = make_time_spacing_schedule(K, time_schedule, **schedule_kwargs).to(device)
-    elif mode in ["poisson_bd", "polya_bd"]:
-        # BD bridges use lambda schedules
-        grid, lam_p, lam_m, Λp, Λm = make_lambda_schedule(
-            K, lam_p0, lam_p1, lam_m0, lam_m1, bd_schedule_type, device=device
-        )
-        Λ_tot1 = Λp[-1] + Λm[-1]
-        time_points = grid
-    else:  # mode == "poisson"
-        # Get time points (always use make_time_spacing_schedule)
-        time_points = make_time_spacing_schedule(K, time_schedule, **schedule_kwargs).to(device)
+
+    grid, lam_p, lam_m, Λp, Λm = make_lambda_schedule(
+        K, lam_p0, lam_p1, lam_m0, lam_m1, bd_schedule_type, device=device
+    )
+    Λ_tot1 = Λp[-1] + Λm[-1]
+    time_points = grid
     
     time_points = torch.flip(time_points, [0])
     
@@ -127,250 +107,65 @@ def reverse_sampler(
         
         # Use unified sampling interface
         x0_hat = model.sample(x, z, t, use_mean=use_mean).float()
-        print(x0_hat, z)
+        print(x1.float().mean(0), x.float().mean(0), x0_hat.float().mean(0), z.float().mean(0), t.float().mean())
         
-        if mode in ["poisson_bd", "polya_bd"]:
-            # Birth-death bridge sampling
-            k_current = step
-            k_next = step + 1 if step < K-1 else K
-            
-            # Original indexing (revert the "fix")
-            w_t = (Λp[K - k_current] + Λm[K - k_current]) / Λ_tot1
-            w_s = (Λp[K - k_next] + Λm[K - k_next]) / Λ_tot1 if k_next < K else torch.tensor(0.0, device=device)
-            
-            # Use floor instead of round to match expected value exactly
-            if step == 0:
-                N_t = torch.binomial(N.float(), w_t).long() #  torch.floor(N.float() * w_t).long()
-            else:
-                N_t = N_s
-            N_s = torch.binomial(N_t.float(), w_s / w_t).long() #  torch.floor(N.float() * w_s).long()
-            
-            # Recover B_t from current x and predicted x0_hat
-            delta = (x - x0_hat)  # (B, d)
-            
-            # Validate that delta + N_t is even (required for integer B_t)
-            remainder = (delta + N_t) % 2
-            # if torch.any(remainder != 0):
-            #     print(f"Warning: Found {torch.sum(remainder != 0)} non-even (delta + N_t) values, rounding delta")
-            # Round delta to nearest even value relative to N_t
-            delta = delta - remainder
-            
-            # Clamp delta to valid range and ensure B_t is in [0, N_t]
-            delta = torch.clamp(delta, min=-N_t.float(), max=N_t.float())
-            B_t = ((N_t + delta) // 2).long()
-            # Ensure B_t is in valid range [0, N_t] element-wise
-            B_t = torch.maximum(torch.zeros_like(B_t), torch.minimum(B_t, N_t))
-            
-            # Draw B_s ~ Hypergeom(N_t, B_t, N_s)
-            B_s = torch.zeros_like(B_t)
-            
-            # Vectorized hypergeometric sampling
-            B_s_np = manual_hypergeometric(
-                total_count=N_t.cpu().numpy(),
-                num_successes=B_t.cpu().numpy(), 
-                num_draws=N_s.cpu().numpy()
-            )
-            B_s = torch.from_numpy(B_s_np).to(device)
-            
-            # Update x: x_{s_k} = x_t - 2*(B_t - B_s) + (N_t - N_s)
-            x = x - 2 * (B_t - B_s) + (N_t - N_s)
+        # Store x0_hat prediction if requested
+        if return_trajectory and return_x_hat:
+            x_hat_trajectory.append(x0_hat.clone().cpu())
         
+        # Birth-death bridge sampling
+        k_current = step
+        k_next = step + 1 if step < K-1 else K
+        
+        # Original indexing (revert the "fix")
+        w_t = (Λp[K - k_current] + Λm[K - k_current]) / Λ_tot1
+        w_s = (Λp[K - k_next] + Λm[K - k_next]) / Λ_tot1 if k_next < K else torch.tensor(0.0, device=device)
+        
+        # Use floor instead of round to match expected value exactly
+        if step == 0:
+            N_t = torch.binomial(N.float(), w_t).long() #  torch.floor(N.float() * w_t).long()
         else:
-            # Original one-sided bridge logic
-            # Compute delta
-            delta = x - x0_hat
-            n = delta.abs().clamp_max(1e6).long()
-            sgn = torch.sign(delta)
-            
-            # Bridge kernel parameters
-            if mode == "nb":
-                # Use proper bridge formulation from paper
-                # For reverse sampling: we want the probability of decrementing by a certain amount
-                
-                # Get Φ(t_current) - this tells us the "amount of mass" accumulated so far
-                phi_current = get_bridge_parameters(t_current, phi_sched, R)[0]  # α = Φ(t)
-                phi_next = get_bridge_parameters(t_next, phi_sched, R)[0]       # α = Φ(t_next)
-                
-                # Step size in Φ space: how much Φ decreases in this step
-                phi_step = phi_current - phi_next  # Φ(t_current) - Φ(t_next)
-                
-                # For reverse sampling, the probability should be proportional to 
-                # the step size relative to the remaining "time mass"
-                # This is a reasonable approximation to the complex reverse kernel
-                
-                # Correct Beta distribution parameters for reverse kernel:
-                # α = Φ(s) = Φ(t_next) (target time)
-                # β = Φ(t) - Φ(s) = Φ(t_current) - Φ(t_next) (step size)
-                alpha_step = torch.clamp(phi_next.expand_as(n), min=1e-6)          # Φ(s) target
-                beta_step = torch.clamp(phi_step.expand_as(n), min=1e-6)          # Step size
-                
-                p_step = Beta(alpha_step, beta_step).sample().clamp(0., 0.999).to(device)
-            else:  # Poisson
-                dt_step = t_current - t_next
-                p_step = torch.full_like(x, dt_step / t_current).clamp(0., 0.999)
-            
-            # Sample decrements only where n > 0
-            krem = torch.zeros_like(n).float().to(device)
-            mask = n > 0
-            
-            if mask.any():
-                krem[mask] = Binomial(
-                    total_count=n[mask],
-                    probs=p_step[mask]
-                ).sample()
-            
-            # Apply step
-            x = x - sgn * krem
+            N_t = N_s
+        N_s = torch.binomial(N_t.float(), w_s / w_t).long() #  torch.floor(N.float() * w_s).long()
         
+        # Recover B_t from current x and predicted x0_hat
+        delta = (x - x0_hat)  # (B, d)
+        
+        # Validate that delta + N_t is even (required for integer B_t)
+        remainder = (delta + N_t) % 2
+        # if torch.any(remainder != 0):
+        #     print(f"Warning: Found {torch.sum(remainder != 0)} non-even (delta + N_t) values, rounding delta")
+        # Round delta to nearest even value relative to N_t
+        delta = delta - remainder
+        
+        # Clamp delta to valid range and ensure B_t is in [0, N_t]
+        # delta = torch.clamp(delta, min=-N_t.float(), max=N_t.float())
+        B_t = ((N_t + delta) // 2).long()
+        # Ensure B_t is in valid range [0, N_t] element-wise
+        B_t = torch.maximum(torch.zeros_like(B_t), torch.minimum(B_t, N_t))
+        
+        # Draw B_s ~ Hypergeom(N_t, B_t, N_s)
+        B_s = torch.zeros_like(B_t)
+        
+        # Vectorized hypergeometric sampling
+        B_s_np = manual_hypergeometric(
+            total_count=N_t.cpu().numpy(),
+            num_successes=B_t.cpu().numpy(), 
+            num_draws=N_s.cpu().numpy()
+        )
+        B_s = torch.from_numpy(B_s_np).to(device)
+        
+        # Update x: x_{s_k} = x_t - 2*(B_t - B_s) + (N_t - N_s)
+        x = x - 2 * (B_t - B_s) + (N_t - N_s)
+    
         # Store trajectory step if requested
         if return_trajectory:
             trajectory.append(x.clone().cpu())
     
     if return_trajectory:
-        return x.long(), trajectory
+        if return_x_hat:
+            return x.long(), trajectory, x_hat_trajectory
+        else:
+            return x.long(), trajectory
     else:
         return x.long()
-
-
-def debug_bd_indexing(K=10, lam_p0=1.0, lam_p1=1.0, lam_m0=1.0, lam_m1=1.0, device="cpu"):
-    """
-    Debug function to verify BD bridge time indexing is correct.
-    Should show that w_t goes from ~1.0 to ~0.0 as step increases.
-    """
-    print("=== BD Bridge Indexing Debug ===")
-    
-    # Create schedules
-    grid, lam_p, lam_m, Λp, Λm = make_lambda_schedule(
-        K, lam_p0, lam_p1, lam_m0, lam_m1, "constant", device=device
-    )
-    Λ_tot1 = Λp[-1] + Λm[-1]
-    
-    print(f"Raw grid: {grid}")
-    print(f"Λp: {Λp}")
-    print(f"Λm: {Λm}")
-    print(f"Λ_tot1: {Λ_tot1}")
-    
-    # Flip for reverse process
-    time_points = torch.flip(grid, [0])
-    print(f"Flipped time_points: {time_points}")
-    
-    print("\nStep -> t_current -> w_t:")
-    for step in range(K):
-        t_current = time_points[step]
-        grid_idx_current = K - step  # Map flipped step to original grid index
-        w_t = (Λp[grid_idx_current] + Λm[grid_idx_current]) / Λ_tot1
-        print(f"  {step:2d} -> {t_current:.3f} -> {w_t:.3f}")
-    
-    print(f"\nExpected: w_t should go from {(Λp[-1] + Λm[-1]) / Λ_tot1:.3f} to {(Λp[0] + Λm[0]) / Λ_tot1:.3f}")
-    print("=== End Debug ===\n")
-
-
-def test_bd_linear_interpolant(model, x1, z, K=50, batch_size=1000, mode="poisson_bd", device="cpu"):
-    """
-    Test that BD bridge trajectories follow the expected linear interpolant in mean.
-    For large batches, E[X_t] should ≈ linear interpolation between x0_hat and x1.
-    """
-    print("=== Testing BD Linear Interpolant ===")
-    
-    # Get model prediction at t=1
-    t1 = torch.full_like(x1[:, :1], 1.0)
-    x0_hat = model.sample(x1, z, t1, use_mean=True).float()
-    
-    print(f"x1 mean: {x1.float().mean():.3f}")
-    print(f"x0_hat mean: {x0_hat.mean():.3f}")
-    print(f"Expected trajectory: linear from {x0_hat.mean():.3f} to {x1.float().mean():.3f}")
-    
-    # Sample many trajectories and check means at different time points
-    test_times = [0.2, 0.4, 0.6, 0.8]
-    
-    for t_test in test_times:
-        # Generate many samples at this time point
-        trajectories = []
-        for _ in range(batch_size // 10):  # Process in smaller batches
-            _, traj = reverse_sampler(
-                x1[:10], z[:10], model, K=K, mode=mode, device=device,
-                return_trajectory=True
-            )
-            trajectories.extend(traj)
-        
-        # Find trajectory point closest to t_test
-        time_idx = int(t_test * K)
-        x_t_samples = [traj[time_idx] for traj in trajectories]
-        x_t_mean = torch.stack(x_t_samples).float().mean()
-        
-        # Expected linear interpolant
-        expected_mean = x0_hat.mean() + t_test * (x1.float().mean() - x0_hat.mean())
-        
-        print(f"t={t_test:.1f}: observed={x_t_mean:.3f}, expected={expected_mean:.3f}, diff={abs(x_t_mean - expected_mean):.3f}")
-    
-    print("=== End Test ===\n")
-
-
-@torch.no_grad()
-def reverse_sampler_reflected_bd(
-    x1, z, model,
-    n_steps=50,
-    lam0=8.0, lam1=8.0,
-    use_mean=False,
-    device="cuda",
-    return_trajectory=False,
-):
-    """
-    Reflected BD bridge (λ_+ = λ_-).  Sample hidden signed bridge once,
-    then reflect at t=0.
-    """
-    B, d = x1.shape
-    x_ref = x1.clone().to(device).long()          # |X_1|
-    t_grid = torch.linspace(0, 1, n_steps, device=device)   # (K,)
-    # λ(t_k) linear
-    lam_vals = lam0 + (lam1 - lam0) * t_grid                  # (K,)
-    dt = 1.0 / (n_steps - 1)
-    lam_mid = 0.5 * (lam_vals[:-1] + lam_vals[1:])
-    Lam = torch.zeros_like(lam_vals)
-    Lam[1:] = torch.cumsum(lam_mid * dt, 0)                   # Λ(t_k)
-    Λ1 = Lam[-1].item()
-
-    if return_trajectory:
-        traj = [x_ref.cpu()]
-
-    # ------------ latent variables at t=1 ------------
-    t1 = torch.ones(B, 1, device=device)
-    x0_hat = model.sample(x_ref.float(), z, t1, use_mean=use_mean).long()  # (B,d)
-    diff = (x_ref - x0_hat).abs()                         # |b-a|
-    M = torch.distributions.Poisson(2.0 * Λ1).sample(diff.shape).long().to(device)
-    N = diff + 2 * M                                      # (B,d)   total jumps
-    B1 = (N + (x_ref - x0_hat)) // 2                      # (B,d)   births
-
-    # ---- choose hidden sign once with weight π₊(|X_1|) ----
-    #   With X_t = ±x_ref  ⇒  B1 already tells us which sign produced X_1
-    #   If diff>0 the parent must be + sign; if diff==0 choose ± equiprob.
-    # 1) decide sign ONCE ------------------------------------------
-    parent_pos = (torch.rand_like(diff, dtype=torch.float32) < 0.5)  # provisional
-    must_pos   = (diff % 2 == 1)        # if N is odd, sign is forced
-    parent_pos = torch.where(must_pos, torch.ones_like(parent_pos, dtype=torch.bool),
-                            parent_pos)
-
-    sign = torch.where(parent_pos, torch.tensor(1, device=device),
-                    torch.tensor(-1, device=device))            # (B,d)
-    X_signed = sign * x_ref                                        # keep this forever
-
-    # ------------ backward sweep ------------
-    for k in range(n_steps - 1, 0, -1):
-        w_t = (Lam[k] / Λ1).clamp(0.0, 1.0)
-        w_s = (Lam[k-1] / Λ1).clamp(0.0, 1.0)
-        N_t = torch.floor(N.float() * w_t).long()     # (B,d)
-        N_s = torch.floor(N.float() * w_s).long()     # (B,d)
-
-        B_t = (N_t + (X_signed - x0_hat)) // 2        # births at t_k   (B,d)
-        # sample births at s via Hypergeometric
-        B_s_np = manual_hypergeometric(
-            N_t.cpu().numpy(), B_t.cpu().numpy(), N_s.cpu().numpy())
-        B_s = torch.from_numpy(B_s_np).to(device)
-
-        X_signed = X_signed - 2 * (B_t - B_s) - (N_t - N_s)   # signed X_s
-
-        if return_trajectory:
-            traj.append(X_signed.abs().cpu())
-
-    x0 = X_signed.abs().long()        # reflect at t=0
-    return (x0, traj) if return_trajectory else x0 

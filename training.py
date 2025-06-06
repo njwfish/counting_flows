@@ -42,11 +42,17 @@ def train_model(
         
         # Move to device
         x0 = batch['x0'].to(device)
+        x1 = batch['x1'].to(device)
         x_t = batch['x_t'].to(device) 
         z = batch['z'].to(device)
         t = batch['t'].to(device).unsqueeze(-1)  # Add dimension for broadcasting
 
-        
+        if step == 0:
+            print(
+                x0.float().mean(0), x1.float().mean(0), "\n",
+                x_t.float().mean(0), x0.float().mean(0) * (1 - t.float().mean()) + x1.float().mean(0) * t.float().mean(), "\n",
+                t.float().mean(), z.float().mean(0)
+            )
         # Training step
         optimizer.zero_grad()
         loss = model.loss(x0, x_t, z, t)

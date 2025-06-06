@@ -11,8 +11,7 @@ import os
 from pathlib import Path
 
 from .cli import parse_args
-from .models import NBPosterior, BetaBinomialPosterior, MLERegressor, ZeroInflatedPoissonPosterior
-from .datasets import PoissonBridgeCollate, NBBridgeCollate
+from .models import NBPosterior, BetaBinomialPosterior, MLERegressor, ZeroInflatedPoissonPosterior, IQNPosterior
 from .training import train_model, create_training_dataloader
 from .samplers import reverse_sampler
 from .visualization import (
@@ -53,7 +52,7 @@ def main():
     
     # Quick mode adjustments
     if args.quick:
-        args.iterations = 2000
+        args.iterations = 6000
         args.gen_samples = 1000
     
     # Set sampling schedules
@@ -109,6 +108,9 @@ def main():
     elif args.arch == "zip":
         model = ZeroInflatedPoissonPosterior(x_dim=args.data_dim, context_dim=context_dim, hidden=args.hidden)
         print("Model: Zero-Inflated Poisson posterior")
+    elif args.arch == "iqn":
+        model = IQNPosterior(x_dim=args.data_dim, context_dim=context_dim, hidden=args.hidden)
+        print("Model: Implicit Quantile Networks")
     else:
         model = MLERegressor(x_dim=args.data_dim, context_dim=context_dim, hidden=args.hidden)
         print("Model: MLE regressor")
