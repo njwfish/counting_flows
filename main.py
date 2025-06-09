@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 
 from .cli import parse_args
-from .models import NBPosterior, BetaBinomialPosterior, MLERegressor, ZeroInflatedPoissonPosterior, IQNPosterior
+from .models import NBPosterior, BetaBinomialPosterior, MLERegressor, ZeroInflatedPoissonPosterior, IQNPosterior, MMDPosterior
 from .training import train_model, create_training_dataloader
 from .samplers import reverse_sampler
 from .visualization import (
@@ -52,7 +52,7 @@ def main():
     
     # Quick mode adjustments
     if args.quick:
-        args.iterations = 6000
+        args.iterations = 5_000
         args.gen_samples = 1000
     
     # Set sampling schedules
@@ -111,6 +111,9 @@ def main():
     elif args.arch == "iqn":
         model = IQNPosterior(x_dim=args.data_dim, context_dim=context_dim, hidden=args.hidden)
         print("Model: Implicit Quantile Networks")
+    elif args.arch == "mmd":
+        model = MMDPosterior(x_dim=args.data_dim, context_dim=context_dim, hidden=args.hidden)
+        print("Model: Maximum Mean Discrepancy")
     else:
         model = MLERegressor(x_dim=args.data_dim, context_dim=context_dim, hidden=args.hidden)
         print("Model: MLE regressor")

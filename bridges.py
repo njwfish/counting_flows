@@ -295,3 +295,118 @@ class PolyaBDBridgeCollate:
             "Λp"  : Λp,
             "Λm"  : Λm,
         }
+
+import torch
+
+class ReflectedPoissonBDBridgeCollate:
+    """
+    Collate for *reflected* Poisson birth–death bridge (equal λ₊,λ₋ at each time).
+    Samples x_t = |X_t| by drawing X_t via Hypergeometric(N, B1, N_t) then taking abs.
+    """
+
+    def __init__(
+        self,
+        n_steps: int,
+        lam_p0: float = 8.0,
+        lam_p1: float = 8.0,
+        lam_m0: float = 8.0,
+        lam_m1: float = 8.0,
+        schedule_type: str = "constant",
+        time_schedule: str = "uniform",
+        homogeneous_time: bool = True,
+        **schedule_kwargs,
+    ):
+        self.n_steps = n_steps
+        self.lam_p0 = lam_p0
+        self.lam_p1 = lam_p1
+        self.lam_m0 = lam_m0
+        self.lam_m1 = lam_m1
+        self.schedule_type = schedule_type
+        self.homogeneous_time = homogeneous_time
+        # precompute time grid for optional use
+        self.time_points = make_time_spacing_schedule(n_steps, time_schedule, **schedule_kwargs)
+
+    def _sample_N_B1(self, diff: torch.LongTensor, Lambda_p: torch.Tensor, Lambda_m: torch.Tensor, device):
+        """
+        diff = x1 - x0   (LongTensor [B, d])
+        Lambda_p, Lambda_m: scalars (cumulative integrals at t=1)
+        Returns:
+          N  : LongTensor total jumps by t=1
+          B1 : LongTensor births by t=1
+        """
+        # scalar λ*
+        lambda_star = 2.0 * torch.sqrt(Lambda_p * Lambda_m)          # float scalar
+        lambda_star = lambda_star.unsqueeze(-1).expand_as(diff)      # (B,d)
+        M = torch.poisson(lambda_star).long().to(device)             # over‐dispersion
+        N = diff.abs() + 2 * M                                       # total jumps
+        B1 = ((N + diff) >> 1)                                       # births
+        return N, B1
+
+    def __call__(self, batch):
+        # unpack batch of dicts
+        x0 = torch.stack([b["x0"] for b in batch])
+        x1 = torch.stack([b["x1"] for b in batch])
+        z  = torch.stack([b["z"]  for b in batch])
+
+        # handle extra singleton batch‐dim
+        if x0.dim() == 3:
+            x0 = x0.squeeze(0)
+            x1 = x1.squeeze(0)
+            z  = z .squeeze(0)
+
+        device = x0.device
+        B, d = x0.shape
+
+        # 1) build forward‐time schedules
+        grid, lam_p, lam_m, Λp, Λm = make_lambda_schedule(
+            self.n_steps,
+            self.lam_p0, self.lam_p1,
+            self.lam_m0, self.lam_m1,
+            self.schedule_type,
+            device=device
+        )
+        Λ_tot1 = Λp[-1] + Λm[-1]
+
+        # 2) sample latent (N, B1) at t=1
+        diff = (x1 - x0).round().long()  # ensure integer
+        N, B1 = self._sample_N_B1(diff, Λp[-1], Λm[-1], device)
+
+        # 3) choose a time‐index k ∈ {1,…,n_steps}
+        if self.homogeneous_time:
+            k = torch.randint(1, self.n_steps + 1, (1,), device=device).item()
+            k_idx = torch.full((B,), k, device=device)
+        else:
+            k_idx = torch.randint(1, self.n_steps + 1, (B,), device=device)
+
+        # 4) get corresponding t and jump‐fraction w_t
+        t   = grid[k_idx]                                  # (B,)
+        w_t = (Λp[k_idx] + Λm[k_idx]) / Λ_tot1             # (B,)
+
+        # 5) thinning N → N_t ~ Binomial(N, w_t)
+        w_t = w_t.unsqueeze(-1).expand_as(N)               # broadcast to (B,d)
+        N_t = torch.distributions.Binomial(N.float(), w_t).sample().long()
+
+        # 6) hypergeometric draw for births up to t
+        B_t_np = manual_hypergeometric(
+            total_count = N.cpu().numpy(),
+            num_successes = B1.cpu().numpy(),
+            num_draws =     N_t.cpu().numpy()
+        )
+        B_t = torch.from_numpy(B_t_np).to(device).long()
+
+        # 7) build signed X_t, then reflect
+        X_t_signed = x0 + 2 * B_t - N_t                     # may be negative
+        x_t = X_t_signed.abs()                              # reflected at 0
+
+        return {
+            "x0" : x0,   # start
+            "x1" : x1,   # end
+            "x_t": x_t,  # |X_t|
+            "t"  : t,    # time
+            "z"  : z,    # context
+            "N"  : N,    # total jumps
+            "B1" : B1,   # births at t=1
+            "grid": grid,
+            "Λp" : Λp,
+            "Λm" : Λm,
+        }

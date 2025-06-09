@@ -33,9 +33,9 @@ def parse_args():
     # Model architecture
     parser.add_argument(
         "--arch", "--architecture", 
-        choices=["nb", "mle", "bb", "zip", "iqn"], 
+        choices=["nb", "mle", "bb", "zip", "iqn", "mmd"], 
         default="nb",
-        help="Neural architecture: 'nb' (Negative Binomial), 'mle' (MLE Regressor), 'bb' (Beta-Binomial), 'zip' (Zero-Inflated Poisson), or 'iqn' (Implicit Quantile Networks)"
+        help="Neural architecture: 'nb' (Negative Binomial), 'mle' (MLE Regressor), 'bb' (Beta-Binomial), 'zip' (Zero-Inflated Poisson), 'iqn' (Implicit Quantile Networks), or 'mmd' (Maximum Mean Discrepancy)"
     )
     
     # Bridge mode
@@ -91,10 +91,10 @@ def parse_args():
     parser.add_argument("--concentration", type=float, default=2.0, help="Concentration for time spacing schedules")
     
     # Training hyperparameters
-    parser.add_argument("--lr", "--learning-rate", type=float, default=2e-3, help="Learning rate")
+    parser.add_argument("--lr", "--learning-rate", type=float, default=2e-4, help="Learning rate")
     parser.add_argument("--batch-size", "-B", type=int, default=128, help="Batch size")
     parser.add_argument("--steps", "--n-steps", type=int, default=30, help="Number of diffusion steps")
-    parser.add_argument("--iterations", "-i", type=int, default=500000, help="Training iterations")
+    parser.add_argument("--iterations", "-i", type=int, default=20_000, help="Training iterations")
     parser.add_argument("--hidden", type=int, default=128, help="Hidden layer size")
     
     # DataLoader options

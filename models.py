@@ -7,6 +7,7 @@ Provides different neural architectures for predicting count distributions:
 - MLERegressor: Direct count prediction via log(1 + x₀)
 - ZeroInflatedPoissonPosterior: Zero-Inflated Poisson parameters (λ, π)
 - IQNPosterior: Implicit Quantile Networks for count prediction
+- MMDPosterior: Maximum Mean Discrepancy with L2 kernel
 """
 
 import torch
@@ -335,8 +336,10 @@ class IQNPosterior(BaseCountModel):
         
         # Get quantile predictions
         quantiles = self.output_layer(combined)  # [batch_size, n_quantiles, x_dim]
+
+        x_t_expanded = x_t.unsqueeze(1).expand(-1, n_tau, -1)
         
-        return quantiles
+        return quantiles + x_t_expanded
     
     def process_output(self, h):
         # This method is required by base class but not used in IQN
@@ -404,3 +407,142 @@ class IQNPosterior(BaseCountModel):
         
         # Average over quantiles and sum over dimensions, then mean over batch
         return quantile_loss.mean(dim=1).sum(dim=1).mean() 
+
+
+import torch
+import torch.nn as nn
+
+import torch
+import torch.nn as nn
+
+class MMDPosterior(BaseCountModel):
+    """
+    Distributional-diffusion energy score (eq.14) with m-sample approximation.
+    f_θ(x_t, t, z, ε) → x₀̂ = x_t + Δx
+    """
+    def __init__(
+        self,
+        x_dim: int,
+        context_dim: int,
+        hidden: int = 128,
+        noise_dim: int = None,
+        sigma: float = 1.0,
+        m_samples: int = 16,
+        lambda_energy: float = 1.0,
+    ):
+        super().__init__(x_dim, context_dim, hidden)
+        # dimension of your Gaussian noise
+        self.noise_dim      = noise_dim if noise_dim is not None else hidden
+        # # samples per data point
+        self.m              = m_samples
+        # λ weight for the interaction term
+        self.lambda_energy  = lambda_energy
+
+        # total #features going into the MLP:
+        #  - x_t: x_dim
+        #  - t:     1
+        #  - z: context_dim
+        #  - ε: noise_dim
+        self._in_dim = x_dim + 1 + context_dim + self.noise_dim
+
+        # build your network
+        self.net = nn.Sequential(
+            nn.Linear(self._in_dim, hidden),
+            nn.SELU(),
+            nn.Linear(hidden, hidden),
+            nn.SELU(),
+            nn.Linear(hidden, hidden),
+            nn.SELU(),
+            nn.Linear(hidden, x_dim),
+        )
+
+    @property
+    def output_dim(self):
+        return self.x_dim
+
+    def process_output(self, h):
+        return h
+
+    def forward(self, x_t, z, t, noise=None):
+        """
+        x_t: [B, x_dim]
+        z:   [B, context_dim]
+        t:   [B] or [B,1]
+        noise: [B, noise_dim] or None (will be sampled)
+        → returns [B, x_dim]
+        """
+        B = x_t.shape[0]
+        # 1) sample noise if needed
+        if noise is None:
+            noise = torch.randn(B, self.noise_dim, device=x_t.device)
+
+        # 2) unify t to shape [B,1]
+        if t.dim() == 1:
+            t_col = t.unsqueeze(-1)
+        elif t.dim() == 2 and t.shape[1] == 1:
+            t_col = t
+        else:
+            raise ValueError(f"t must be [B] or [B,1], got {tuple(t.shape)}")
+
+        # 3) concat everything
+        inp = torch.cat([x_t.float(), t_col.float(), z.float(), noise], dim=-1)
+
+        # 4) sanity check
+        assert inp.shape[1] == self._in_dim, (
+            f"got inp dim={inp.shape[1]}, expected {self._in_dim}"
+        )
+
+        # 5) predict Δx, add to x_t
+        return self.net(inp) + x_t
+
+    def sample(self, x_t, z, t, use_mean=False):
+        x0_hat = self.forward(x_t, z, t)
+        return x0_hat.round().long()
+
+    def _pairwise_dist(self, a, b, eps=1e-6):
+        """
+        a: [n, d], b: [m, d] → [n, m] of √(||a_i - b_j||² + eps)
+        """
+        diff = a.unsqueeze(1) - b.unsqueeze(0)      # [n, m, d]
+        sq   = (diff * diff).sum(-1)                # [n, m]
+        return torch.sqrt(torch.clamp(sq, min=eps))
+
+    def loss(self, x0_true, x_t, z, t):
+        """
+        Empirical energy-score (Distrib. Diffusion Models eq.14):
+          L = mean_i [
+            (1/m) ∑_j ||x0_trueᵢ - x̂ᵢⱼ||
+            - (λ/(2(m-1))) ∑_{j≠j'} ||x̂ᵢⱼ - x̂ᵢⱼ'||
+          ]
+        """
+        n, m, λ = x0_true.size(0), self.m, self.lambda_energy
+
+        # — replicate each input m times —
+        x_t_rep = x_t.unsqueeze(1).expand(-1, m, -1).reshape(n * m, -1)
+        z_rep   =   z.unsqueeze(1).expand(-1, m, -1).reshape(n * m, -1)
+        # flatten t to 1D so forward() will turn it into [n*m,1]
+        if t.dim() == 2 and t.shape[1] == 1:
+            t_rep = t.expand(-1, m).reshape(n * m)
+        elif t.dim() == 1:
+            t_rep = t.unsqueeze(1).expand(-1, m).reshape(n * m)
+        else:
+            raise ValueError(f"t must be [n] or [n,1], got {tuple(t.shape)}")
+
+        # sample m·n noises
+        noise = torch.randn(n * m, self.noise_dim, device=x_t.device)
+
+        # get all x̂ preds: [n*m, x_dim] → view [n, m, x_dim]
+        x0_preds = self.forward(x_t_rep, z_rep, t_rep, noise)
+        x0_preds = x0_preds.view(n, m, -1)  # [n, m, d]
+
+        # 1) confinement
+        x0_true_rep = x0_true.unsqueeze(1).expand(-1, m, -1)
+        term_conf   = (x0_preds - x0_true_rep).norm(dim=2).mean(dim=1)  # [n]
+
+        # 2) interaction (properly scaled!)
+        pdists    = torch.stack([torch.pdist(x0_preds[i], p=2) for i in range(n)], dim=0)
+        mean_pd   = pdists.mean(dim=1)                                # [n]
+        term_int  = (λ / 2.0) * mean_pd                               # [n]
+
+        return (term_conf - term_int).mean()
+
