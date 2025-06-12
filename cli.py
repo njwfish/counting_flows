@@ -41,7 +41,7 @@ def parse_args():
     # Bridge mode
     parser.add_argument(
         "--bridge", "--bridge-mode",
-        choices=["nb", "poisson", "poisson_bd", "polya_bd", "reflected_bd"],
+        choices=["nb", "poisson", "poisson_bd", "polya_bd", "reflected_bd", "poisson_bd_mean"],
         default="nb", 
         help="Bridge type: 'nb' (Polya/Beta-Binomial), 'poisson' (exact Poisson), 'poisson_bd' (Poisson Birth-Death), 'polya_bd' (Polya Birth-Death), or 'reflected_bd' (Reflected Birth-Death)"
     )

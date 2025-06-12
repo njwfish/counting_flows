@@ -306,3 +306,95 @@ def plot_loss_curve(losses, title="Training Loss"):
         ax.legend()
     
     return fig
+
+
+def plot_full_reverse_trajectories(trajectory, x_hat_trajectory, x0_target, x1_batch, mode, K, title="Full Reverse Trajectories"):
+    """
+    Plot reverse trajectories for all samples with elegant handling of large datasets.
+    
+    Args:
+        trajectory: List of tensors, each of shape [B, d] representing x_t at each time step
+        x_hat_trajectory: List of tensors, each of shape [B, d] representing x̂₀ predictions
+        x0_target: Tensor of shape [B, d] - target x0 values
+        x1_batch: Tensor of shape [B, d] - starting x1 values  
+        mode: String indicating bridge type
+        K: Number of time steps
+        title: Plot title
+    """
+    fig, axes = plt.subplots(2, 4, figsize=(20, 10))
+    fig.suptitle(title, fontsize=16)
+    
+    # Convert trajectory data to numpy arrays
+    # trajectory: list of [B, d] tensors -> [K+1, B, d] array
+    traj_array = np.array([step.cpu().numpy() for step in trajectory])  # [K+1, B, d]
+    x_hat_array = np.array([step.cpu().numpy() for step in x_hat_trajectory])  # [K, B, d]
+    
+    B, d = x0_target.shape
+    time_steps = np.linspace(1.0, 0.0, len(traj_array))  # Reverse time from 1 to 0
+    x_hat_time_steps = np.linspace(1.0, 0.0, len(x_hat_array))  # Match x_hat_array length
+    
+    # Plot first 4 dimensions
+    n_dims_to_plot = min(4, d)
+    
+    # Top row: x_t trajectories
+    for dim in range(n_dims_to_plot):
+        ax = axes[0, dim]
+        
+        # Plot all trajectories with low alpha for density visualization
+        for b in range(min(B, 1000)):  # Limit to 1000 trajectories for performance
+            alpha = 0.05 if B > 100 else 0.1
+            ax.plot(time_steps, traj_array[:, b, dim], 'b-', alpha=alpha, linewidth=0.5)
+        
+        # Plot percentiles for summary statistics
+        traj_percentiles = np.percentile(traj_array[:, :, dim], [10, 25, 50, 75, 90], axis=1)
+        ax.plot(time_steps, traj_percentiles[2], 'r-', linewidth=2, label='Median x_t')
+        ax.fill_between(time_steps, traj_percentiles[1], traj_percentiles[3], 
+                       alpha=0.4, color='red', label='25-75%')
+        ax.fill_between(time_steps, traj_percentiles[0], traj_percentiles[4], 
+                       alpha=0.3, color='red', label='10-90%')
+        
+        # Plot target mean as reference
+        target_mean = x0_target[:, dim].float().mean().cpu().numpy()
+        x1_mean = x1_batch[:, dim].float().mean().cpu().numpy()
+        ax.axhline(y=target_mean, color='green', linestyle='--', linewidth=2, label='Target x₀ mean')
+        ax.axhline(y=x1_mean, color='orange', linestyle='--', linewidth=2, label='x₁ mean')
+        
+        ax.set_title(f'x_t Trajectories - Dimension {dim}')
+        ax.set_xlabel('Time t (1→0)')
+        ax.set_ylabel('Count value')
+        ax.grid(True, alpha=0.3)
+        # Don't invert x-axis since time_steps already goes from 1 to 0
+        if dim == 0:
+            ax.legend(fontsize='small', loc='best')
+    
+    # Bottom row: x̂₀ predictions
+    for dim in range(n_dims_to_plot):
+        ax = axes[1, dim]
+        
+        # Plot all x̂₀ predictions with low alpha
+        for b in range(min(B, 1000)):  # Limit to 1000 trajectories for performance
+            alpha = 0.05 if B > 100 else 0.1
+            ax.plot(x_hat_time_steps, x_hat_array[:, b, dim], 'purple', alpha=alpha, linewidth=0.5)
+        
+        # Plot percentiles for x̂₀ predictions
+        xhat_percentiles = np.percentile(x_hat_array[:, :, dim], [10, 25, 50, 75, 90], axis=1)
+        ax.plot(x_hat_time_steps, xhat_percentiles[2], 'purple', linewidth=2, label='Median x̂₀')
+        ax.fill_between(x_hat_time_steps, xhat_percentiles[1], xhat_percentiles[3], 
+                       alpha=0.4, color='purple', label='25-75%')
+        ax.fill_between(x_hat_time_steps, xhat_percentiles[0], xhat_percentiles[4], 
+                       alpha=0.3, color='purple', label='10-90%')
+        
+        # Plot target mean as reference
+        target_mean = x0_target[:, dim].float().mean().cpu().numpy()
+        ax.axhline(y=target_mean, color='green', linestyle='--', linewidth=2, label='Target x₀ mean')
+        
+        ax.set_title(f'x̂₀ Predictions - Dimension {dim}')
+        ax.set_xlabel('Time t (1→0)')
+        ax.set_ylabel('Predicted x₀')
+        ax.grid(True, alpha=0.3)
+        # Don't invert x-axis since x_hat_time_steps already goes from 1 to 0
+        if dim == 0:
+            ax.legend(fontsize='small', loc='best')
+    
+    plt.tight_layout()
+    return fig

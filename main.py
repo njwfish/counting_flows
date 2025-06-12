@@ -13,11 +13,13 @@ from pathlib import Path
 from .cli import parse_args
 from .models import NBPosterior, BetaBinomialPosterior, MLERegressor, ZeroInflatedPoissonPosterior, IQNPosterior, MMDPosterior
 from .training import train_model, create_training_dataloader
-from .samplers import bd_reverse_sampler, reflected_bd_reverse_sampler
+from .samplers import bd_reverse_sampler, reflected_bd_reverse_sampler, bd_reverse_with_interpolated_mean
 from .visualization import (
     plot_schedule_comparison, plot_time_spacing_comparison,
-    plot_reverse_trajectory, plot_generation_analysis, plot_loss_curve
+    plot_reverse_trajectory, plot_generation_analysis, plot_loss_curve,
+    plot_full_reverse_trajectories
 )
+from .bridges import PoissonMeanConstrainedBDBridgeCollate
 
 
 def setup_plot_directories(base_dir="plots"):
@@ -220,6 +222,29 @@ def main():
         print(f"Bridge: Reflected Birth-Death for training")
         print(f"  Equal rates: λ({args.lam0:.1f} → {args.lam1:.1f})")
         print(f"  Time schedule: {args.time_schedule}")
+    elif args.bridge == "poisson_bd_mean":
+        train_dataloader, train_dataset = create_training_dataloader(
+            bridge_type="poisson_bd_mean",
+            dataset_type=args.dataset,
+            batch_size=args.batch_size,
+            d=args.data_dim,
+            n_steps=args.steps,
+            dataset_size=dataset_size,
+            fixed_base=args.fixed_base,
+            time_schedule=args.time_schedule,
+            lam_p0=args.lam_p0,
+            lam_p1=args.lam_p1,
+            lam_m0=args.lam_m0,
+            lam_m1=args.lam_m1,
+            schedule_type=args.bd_schedule,
+            mh_sweeps=getattr(args, "mh_sweeps", 5),
+            **schedule_kwargs
+        )
+        print(f"Bridge: Mean-Constrained Poisson Birth-Death for training")
+        print(f"  Birth rates: λ+({args.lam_p0:.1f} → {args.lam_p1:.1f})")
+        print(f"  Death rates: λ-({args.lam_m0:.1f} → {args.lam_m1:.1f})")
+        print(f"  Lambda schedule: {args.bd_schedule}")
+        print(f"  Time schedule: {args.time_schedule}")
     else:
         raise ValueError(f"Unknown bridge type: {args.bridge}")
     
@@ -262,15 +287,37 @@ def main():
         # Use reverse sampler to generate x0 from x1 using the bridge
         print(f"Using reverse sampler to generate x0 from x1...")
         
-        reverse_sampler = reflected_bd_reverse_sampler if sample_bridge_mode == "reflected_bd" else bd_reverse_sampler
-        x0_samples = reverse_sampler(
-            x1_batch, z_batch, model,
-            K=args.steps,
-            device=device,
-            schedule_type=args.bd_schedule,
-            lam0=args.lam0,
-            lam1=args.lam1,
+        reverse_sampler = (
+            bd_reverse_with_interpolated_mean if sample_bridge_mode == "poisson_bd_mean"
+            else reflected_bd_reverse_sampler if sample_bridge_mode == "reflected_bd"
+            else bd_reverse_sampler
         )
+        if sample_bridge_mode == "poisson_bd_mean":
+            mu0 = x0_target.float().mean(0)  # (d,)
+            sweeps = getattr(args, "mh_sweeps", 10)
+            x0_samples, trajectory, x_hat_trajectory = reverse_sampler(
+                x1_batch, z_batch, model,
+                K=args.steps,
+                lam0=args.lam_p0,
+                lam1=args.lam_p1,
+                mu0=mu0,
+                sweeps=sweeps,
+                device=device,
+                schedule_type=args.bd_schedule,
+                return_trajectory=True,
+                return_x_hat=True,
+            )
+        else:
+            x0_samples, trajectory, x_hat_trajectory = reverse_sampler(
+                x1_batch, z_batch, model,
+                K=args.steps,
+                device=device,
+                schedule_type=args.bd_schedule,
+                lam0=args.lam0,
+                lam1=args.lam1,
+                return_trajectory=True,
+                return_x_hat=True,
+            )
         
         # Compute statistics
         sample_mean = x0_samples.float().mean(0)
@@ -312,30 +359,15 @@ def main():
         plt.savefig(f"{plot_dirs['training']}/loss_{config_str}.png", dpi=150, bbox_inches='tight')
         plt.close()
 
-        # Plot reverse trajectory
-        fig = plot_reverse_trajectory(
-            x0_target,
-            x1_batch, z_batch, model, 
-            K=args.steps, 
-            mode=sample_bridge_mode, 
-            device=device,
-            n_trajectories=5,
-            r_min=args.r_min,
-            r_max=args.r_max,
-            r_schedule=sample_r_schedule,
-            time_schedule=sample_time_schedule,
-            # BD-specific parameters
-            bd_r=args.bd_r,
-            bd_beta=args.bd_beta,
-            lam_p0=args.lam_p0,
-            lam_p1=args.lam_p1,
-            lam_m0=args.lam_m0,
-            lam_m1=args.lam_m1,
-            bd_schedule_type=args.bd_schedule,
-            # Reflected BD parameters
-            lam0=args.lam0,
-            lam1=args.lam1,
-            **schedule_kwargs
+        # Plot reverse trajectory using full trajectory data
+        fig = plot_full_reverse_trajectories(
+            trajectory=trajectory,
+            x_hat_trajectory=x_hat_trajectory,
+            x0_target=x0_target,
+            x1_batch=x1_batch,
+            mode=sample_bridge_mode,
+            K=args.steps,
+            title=f"Full Reverse Trajectories ({sample_bridge_mode} bridge)"
         )
         plt.savefig(f"{plot_dirs['sampling']}/trajectories_{sample_config_str}.png", dpi=150, bbox_inches='tight')
         plt.close()

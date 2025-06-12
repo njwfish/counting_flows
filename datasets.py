@@ -13,7 +13,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.distributions import Poisson, Binomial, Beta
 import numpy as np
-from .bridges import PoissonBDBridgeCollate, PolyaBDBridgeCollate, ReflectedPoissonBDBridgeCollate
+from .bridges import PoissonBDBridgeCollate, PolyaBDBridgeCollate, ReflectedPoissonBDBridgeCollate, PoissonMeanConstrainedBDBridgeCollate
 from abc import ABC, abstractmethod
 
 
@@ -302,6 +302,8 @@ def create_dataloader(bridge_type, dataset_type, batch_size, **kwargs):
         collate_fn = PolyaBDBridgeCollate(**collate_kwargs)
     elif bridge_type == "reflected_bd":
         collate_fn = ReflectedPoissonBDBridgeCollate(**collate_kwargs)
+    elif bridge_type == "poisson_bd_mean":
+        collate_fn = PoissonMeanConstrainedBDBridgeCollate(**collate_kwargs)
     else:
         raise ValueError(f"Unknown bridge type: {bridge_type}")
     
