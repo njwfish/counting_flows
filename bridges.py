@@ -96,7 +96,7 @@ class PoissonBDBridgeCollate:
         M = torch.poisson(lambda_star).long().to(device)
         N = diff.abs() + 2 * M
         B1 = (N + diff) // 2   # integer division
-        return N, B1
+        return N, M, B1
 
     def _sample_time(self):
         """Sample time point from pre-computed schedule"""
@@ -130,7 +130,7 @@ class PoissonBDBridgeCollate:
 
         # latent (N,B1)
         diff = (x1 - x0)          # (B, d) - don't squeeze
-        N, B1 = self._sample_N_B1(diff, Λp[-1], Λm[-1], device)       # shape (B, d)
+        N, M, B1 = self._sample_N_B1(diff, Λp[-1], Λm[-1], device)       # shape (B, d)
 
         # pick random interior k (avoid k=0,K)
         if self.homogeneous_time:
@@ -159,6 +159,9 @@ class PoissonBDBridgeCollate:
 
         x_t = x0 + (2 * B_t - N_t)          # (B, d)
 
+        diff_t = (x_t - x0).abs()          # (B,d)
+        M_t    = ((N_t - diff_t) >> 1)     # integer tensor (B,d)
+
         return {
             "x0"  : x0,
             "x1"  : x1,
@@ -166,6 +169,7 @@ class PoissonBDBridgeCollate:
             "t"   : t,
             "z"   : z,
             "N"   : N,
+            "M" : M_t, 
             "B1"  : B1,
             "grid": grid,
             "Λp"  : Λp,
@@ -220,7 +224,7 @@ class PolyaBDBridgeCollate:
         M = nb.sample((B, d)).long().to(device)
         N = diff.abs() + 2 * M
         B1 = (N + diff) // 2   # integer division
-        return N, B1
+        return N, M, B1
 
     def _sample_time(self):
         """Sample time point from pre-computed schedule"""
@@ -254,7 +258,7 @@ class PolyaBDBridgeCollate:
 
         # latent (N,B1)
         diff = (x1 - x0)          # (B, d) - don't squeeze
-        N, B1 = self._sample_N_B1(diff, device)       # shape (B, d)
+        N, M, B1 = self._sample_N_B1(diff, device)       # shape (B, d)
 
         # pick random interior k (avoid k=0,K)
         if self.homogeneous_time:
@@ -290,6 +294,7 @@ class PolyaBDBridgeCollate:
             "t"   : t,
             "z"   : z,
             "N"   : N,
+            "M"   : M,
             "B1"  : B1,
             "grid": grid,
             "Λp"  : Λp,

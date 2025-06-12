@@ -443,7 +443,7 @@ class MMDPosterior(BaseCountModel):
         #  - t:     1
         #  - z: context_dim
         #  - ε: noise_dim
-        self._in_dim = x_dim + 1 + context_dim + self.noise_dim
+        self._in_dim = x_dim * 2 + 1 + context_dim + self.noise_dim
 
         # build your network
         self.net = nn.Sequential(
@@ -463,7 +463,7 @@ class MMDPosterior(BaseCountModel):
     def process_output(self, h):
         return h
 
-    def forward(self, x_t, z, t, noise=None):
+    def forward(self, x_t, M_t, z, t, noise=None):
         """
         x_t: [B, x_dim]
         z:   [B, context_dim]
@@ -485,7 +485,7 @@ class MMDPosterior(BaseCountModel):
             raise ValueError(f"t must be [B] or [B,1], got {tuple(t.shape)}")
 
         # 3) concat everything
-        inp = torch.cat([x_t.float(), t_col.float(), z.float(), noise], dim=-1)
+        inp = torch.cat([x_t.float(), t_col.float(), z.float(), M_t.float(), noise], dim=-1)
 
         # 4) sanity check
         assert inp.shape[1] == self._in_dim, (
@@ -495,8 +495,8 @@ class MMDPosterior(BaseCountModel):
         # 5) predict Δx, add to x_t
         return self.net(inp) + x_t
 
-    def sample(self, x_t, z, t, use_mean=False):
-        x0_hat = self.forward(x_t, z, t)
+    def sample(self, x_t, M_t, z, t, use_mean=False):
+        x0_hat = self.forward(x_t, M_t, z, t)
         return x0_hat.round().long()
 
     def _pairwise_dist(self, a, b, eps=1e-6):
@@ -507,7 +507,7 @@ class MMDPosterior(BaseCountModel):
         sq   = (diff * diff).sum(-1)                # [n, m]
         return torch.sqrt(torch.clamp(sq, min=eps))
 
-    def loss(self, x0_true, x_t, z, t):
+    def loss(self, x0_true, x_t, M_t, z, t):
         """
         Empirical energy-score (Distrib. Diffusion Models eq.14):
           L = mean_i [
@@ -520,6 +520,7 @@ class MMDPosterior(BaseCountModel):
         # — replicate each input m times —
         x_t_rep = x_t.unsqueeze(1).expand(-1, m, -1).reshape(n * m, -1)
         z_rep   =   z.unsqueeze(1).expand(-1, m, -1).reshape(n * m, -1)
+        M_t_rep = M_t.unsqueeze(1).expand(-1, m, -1).reshape(n * m, -1)
         # flatten t to 1D so forward() will turn it into [n*m,1]
         if t.dim() == 2 and t.shape[1] == 1:
             t_rep = t.expand(-1, m).reshape(n * m)
@@ -532,7 +533,7 @@ class MMDPosterior(BaseCountModel):
         noise = torch.randn(n * m, self.noise_dim, device=x_t.device)
 
         # get all x̂ preds: [n*m, x_dim] → view [n, m, x_dim]
-        x0_preds = self.forward(x_t_rep, z_rep, t_rep, noise)
+        x0_preds = self.forward(x_t_rep, M_t_rep, z_rep, t_rep, noise)
         x0_preds = x0_preds.view(n, m, -1)  # [n, m, d]
 
         # 1) confinement

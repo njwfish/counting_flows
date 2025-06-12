@@ -8,7 +8,7 @@ import torch
 import matplotlib.pyplot as plt
 import numpy as np
 from .scheduling import make_time_spacing_schedule, make_phi_schedule
-from .samplers import reverse_sampler
+from .samplers import bd_reverse_sampler, reflected_bd_reverse_sampler
 
 
 def plot_schedule_comparison(K=50, title="Schedule Comparison"):
@@ -145,20 +145,15 @@ def plot_reverse_trajectory(x0, x1, z, model, K=30, mode="poisson", device="cuda
             z_start_batch = z_start_batch.repeat(repeats, 1)[:n_trajectories]
     
     # Get the full reverse trajectory with intermediate steps (batched)
+    reverse_sampler = reflected_bd_reverse_sampler if mode == "reflected_bd" else bd_reverse_sampler
     x_final, trajectory, x_hat_trajectory = reverse_sampler(
         x_start_batch, z_start_batch, model,
-        K=K, mode=mode, device=device,
-        r_min=r_min, r_max=r_max,
-        r_schedule=r_schedule, time_schedule=time_schedule,
-        # BD-specific parameters
-        bd_r=bd_r, bd_beta=bd_beta,
-        lam_p0=lam_p0, lam_p1=lam_p1, lam_m0=lam_m0, lam_m1=lam_m1,
-        bd_schedule_type=bd_schedule_type,
-        # Reflected BD parameters
+        K=K, device=device,
         lam0=lam0, lam1=lam1,
+        schedule_type=bd_schedule_type,
+        time_schedule=time_schedule,
         return_trajectory=True,
         return_x_hat=True,
-        **schedule_kwargs
     )
     
     # Convert trajectories to numpy arrays for plotting

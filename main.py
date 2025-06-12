@@ -13,7 +13,7 @@ from pathlib import Path
 from .cli import parse_args
 from .models import NBPosterior, BetaBinomialPosterior, MLERegressor, ZeroInflatedPoissonPosterior, IQNPosterior, MMDPosterior
 from .training import train_model, create_training_dataloader
-from .samplers import reverse_sampler
+from .samplers import bd_reverse_sampler, reflected_bd_reverse_sampler
 from .visualization import (
     plot_schedule_comparison, plot_time_spacing_comparison,
     plot_reverse_trajectory, plot_generation_analysis, plot_loss_curve
@@ -261,28 +261,15 @@ def main():
         
         # Use reverse sampler to generate x0 from x1 using the bridge
         print(f"Using reverse sampler to generate x0 from x1...")
+        
+        reverse_sampler = reflected_bd_reverse_sampler if sample_bridge_mode == "reflected_bd" else bd_reverse_sampler
         x0_samples = reverse_sampler(
             x1_batch, z_batch, model,
             K=args.steps,
-            mode=sample_bridge_mode,
-            r_min=args.r_min,
-            r_max=args.r_max,
-            r_schedule=sample_r_schedule,
-            time_schedule=sample_time_schedule,
-            use_mean=args.use_mean,
             device=device,
-            # BD-specific parameters
-            bd_r=args.bd_r,
-            bd_beta=args.bd_beta,
-            lam_p0=args.lam_p0,
-            lam_p1=args.lam_p1,
-            lam_m0=args.lam_m0,
-            lam_m1=args.lam_m1,
-            bd_schedule_type=args.bd_schedule,
-            # Reflected BD parameters
+            schedule_type=args.bd_schedule,
             lam0=args.lam0,
             lam1=args.lam1,
-            **schedule_kwargs
         )
         
         # Compute statistics

@@ -44,6 +44,7 @@ def train_model(
         x0 = batch['x0'].to(device)
         x1 = batch['x1'].to(device)
         x_t = batch['x_t'].to(device) 
+        M_t = batch['M'].to(device)
         z = batch['z'].to(device)
         t = batch['t'].to(device).unsqueeze(-1)  # Add dimension for broadcasting
 
@@ -55,7 +56,7 @@ def train_model(
             )
         # Training step
         optimizer.zero_grad()
-        loss = model.loss(x0, x_t, z, t)
+        loss = model.loss(x0, x_t, M_t, z, t)
         loss.backward()
         optimizer.step()
         
