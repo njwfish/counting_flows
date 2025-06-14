@@ -6,8 +6,8 @@ using trained neural networks and bridge kernels.
 """
 
 import torch
-from torch.distributions import Binomial, Beta, NegativeBinomial
-from .scheduling import make_time_spacing_schedule, make_phi_schedule, get_bridge_parameters, make_lambda_schedule
+from torch.distributions import Binomial
+from .scheduling import make_time_spacing_schedule, make_lambda_schedule
 from .bridges import manual_hypergeometric, mh_mean_constrained_update
 
 from typing import Tuple
@@ -75,14 +75,19 @@ from .bridges import manual_hypergeometric
 # ──────────────────────────────────────────────────────────────────────────────
 #  Reverse–time sampler for the *standard* Birth–Death bridge
 # ──────────────────────────────────────────────────────────────────────────────
+import torch
+from torch.distributions import Binomial
+from .bridges import manual_hypergeometric
+from .scheduling import make_lambda_schedule
+
 @torch.no_grad()
 def bd_reverse_sampler(
-    x1:  torch.LongTensor,            # observed end‑point X₁  (B,d)
-    z:   torch.Tensor,                # conditioning / context
-    model,                            # nn predicting x̂₀(·, t, z, extra)
-    K:         int,                   # #grid steps
-    lam0:      float,                 # λ₊(0)=λ₋(0)
-    lam1:      float,                 # λ₊(1)=λ₋(1)
+    x1:  torch.LongTensor,
+    z:   torch.Tensor,
+    model,
+    K:         int,
+    lam0:      float,
+    lam1:      float,
     schedule_type:  str = "constant",
     time_schedule:  str = "uniform",
     return_trajectory: bool = False,
@@ -90,77 +95,63 @@ def bd_reverse_sampler(
     device: str = "cuda",
 ):
     """
-    Exact reverse sampler with global slack‑pair counter M, thinned each step.
+    Exact reverse sampler with global slack-pair counter M, thinned each step.
     At every grid time we pass M_t to the network.
     """
     device  = torch.device(device)
-    x_t     = x1.to(device).long()        # current state (starts at X₁)
+    x_t     = x1.to(device).long()
     B, d    = x_t.shape
 
-    # 0.  Forward rate schedule and w(t)
+    # 0. Forward schedule
     grid, _, _, Λp, Λm = make_lambda_schedule(
         K, lam0, lam1, lam0, lam1, schedule_type, device=device
     )
-    w = (Λp + Λm) / (Λp[-1] + Λm[-1])     # shape (K+1,)
+    w = (Λp + Λm) / (Λp[-1] + Λm[-1])     # (K+1,)
 
-    # 1.  Global slack‑pair count  M_global  (Poisson)
-    λ_star   = 2.0 * torch.sqrt(Λp[-1] * Λm[-1])            # scalar tensor
-    M_global = torch.poisson(λ_star).long().expand_as(x_t)  # (B,d)
-    M_t      = M_global.clone()                             # at t = 1
+    # 1. Global slack-pair count M_t at t=1
+    λ_star   = 2.0 * torch.sqrt(Λp[-1] * Λm[-1]).expand_as(x_t)
+    M_t      = torch.poisson(λ_star).long()
 
-    # 2.  First network prediction  (t = 1)
+    # 2. First network prediction at t=1
     t1        = torch.ones_like(x_t[:, :1])
     x0_hat_t  = model.sample(x_t, M_t, z, t1).round().long()
     diff      = x_t - x0_hat_t
-    N_t       = diff.abs() + 2 * M_t                        # Eq. (N = |diff|+2M)
-    B_t       = (N_t + diff) >> 1                           # births (integer)
+    N_t       = diff.abs() + 2 * M_t
+    B_t       = (N_t + diff) >> 1
 
-    # optional logging
     traj, xhat_traj = [], []
 
-    # 3.  Reverse sweep  t_k → t_{k-1}
+    # 3. Reverse sweep
     for k in range(K, 0, -1):
-        t_val, s_val = grid[k], grid[k - 1]
-        ρ            = (w[k - 1] / w[k]).item()             # scalar (0,1)
+        print(f"grid: {grid}, grid[k]: {grid[k]}, grid[k-1]: {grid[k-1]}")
+        t_val, s_val = grid[k], grid[k-1]
+        rho          = (w[k-1] / w[k]).item()
 
-        # 3.a  Thin slack pairs:  M_s | M_t ~ Bin(M_t, ρ²)
-        M_s = torch.distributions.Binomial(
-                  total_count=M_t.float(), probs=ρ**2
-        ).sample().long()
-
-        # 3.b  Network prediction at *current* time (t_k)
-        t_tensor = torch.full_like(x_t[:, :1], t_val)
+        # 3.a  Predict x0 at time t_k
+        t_tensor = torch.zeros_like(x_t[:, :1]) + t_val
+        print(f"t_tensor: {t_tensor}")
+        print(f"M_t: {M_t}")
         x0_hat_t = model.sample(x_t, M_t, z, t_tensor).round().long()
         diff     = x_t - x0_hat_t
 
-        #      Re‑define N_t, B_t from diff and *current* M_t
+        # 3.b  Recompute N_t, B_t from current M_t
         N_t = diff.abs() + 2 * M_t
         B_t = (N_t + diff) >> 1
 
-        # 3.c  Binomial thinning of total jumps:  N_s | N_t
-        N_s = torch.distributions.Binomial(
-                  total_count=N_t.float(), probs=ρ
-        ).sample().long()
+        # 3.c  Jointly thin (M_t, N_t) → (M_s, N_s, B_s)
+        #     using the two‐step Binomial helper
+        N_s, B_s, M_s = thin_slack_and_singles(M_t, N_t, B_t, rho, device)
 
-        # 3.d  Hypergeometric thinning of births:  B_s | (N_t, B_t, N_s)
-        B_s_np = manual_hypergeometric(
-            total_count=N_t.cpu().numpy(),
-            num_successes=B_t.cpu().numpy(),
-            num_draws=N_s.cpu().numpy()
-        )
-        B_s = torch.from_numpy(B_s_np).to(device).long()
-
-
-        # 3.f  Roll state for next iteration
-        x_t = x_t - 2 * (B_t - B_s) + (N_t - N_s)
-        M_t = M_s 
+        # 3.d  Roll forward to x_s
+        x_t = x0_hat_t + 2 * B_s - N_s
+        M_t = M_s
 
         if return_trajectory:
             traj.append(x_t.cpu())
         if return_x_hat:
             xhat_traj.append(x0_hat_t.cpu())
 
-    # 4.  Return
+    # 4. Return
     if return_trajectory and return_x_hat:
         return x_t, traj, xhat_traj
     if return_trajectory:
@@ -168,6 +159,59 @@ def bd_reverse_sampler(
     if return_x_hat:
         return x_t, xhat_traj
     return x_t
+
+
+def thin_slack_and_singles(
+    M_t: torch.LongTensor,
+    N_t: torch.LongTensor,
+    B_t: torch.LongTensor,
+    rho: float,
+    device
+):
+    """
+    Joint thinning for slack‐pairs and single‐jumps:
+      • M_s ~ Bin(M_t, rho^2)
+      • L_s ~ Bin(M_t - M_s, 2 rho (1-rho)/(1-rho^2))
+      • N_single = N_t - 2 M_t
+      • N_s_single ~ Bin(N_single, rho)
+      → N_s = 2 M_s + L_s + N_s_single
+
+    Births:
+      • B_s_slack = M_s + Bin(L_s,0.5)      (symmetric slack‐pair births)
+      • B_s_single from Hypergeom(N_single, B_t - M_t, N_s_single)
+    """
+    # Slack‐pair thinning
+    rho2 = rho * rho
+    p_one = 2 * rho * (1 - rho)
+    M_s = Binomial(M_t.float(), rho2).sample().long()
+    rem = M_t - M_s
+    p_one_cond = p_one / (1.0 - rho2)
+    L_s = Binomial(rem.float(), p_one_cond).sample().long()
+
+    # Single‐jump thinning
+    N_single = (N_t - 2 * M_t).clamp(min=0)
+    N_s_single = Binomial(N_single.float(), rho).sample().long()
+
+    # Aggregate N_s
+    N_s = 2 * M_s + L_s + N_s_single
+
+    # Slack‐pair births
+    B_s_slack = M_s + Binomial(L_s.float(), 0.5).sample().long()
+
+    # Single‐jump births via Hypergeom
+    B_single_t = (B_t - M_t).clamp(min=0)
+    B_s_single_np = manual_hypergeometric(
+        total_count   = N_single.cpu().numpy(),
+        num_successes = B_single_t.cpu().numpy(),
+        num_draws     = N_s_single.cpu().numpy(),
+    )
+    B_s_single = torch.from_numpy(B_s_single_np).to(device).long()
+
+    # Total births
+    B_s = B_s_slack + B_s_single
+
+    return N_s, B_s, M_s
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Mean-constrained BD reverse sampler (updated to new slack-pair logic)

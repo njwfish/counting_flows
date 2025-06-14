@@ -13,7 +13,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.distributions import Poisson, Binomial, Beta
 import numpy as np
-from .bridges import PoissonBDBridgeCollate, PolyaBDBridgeCollate, ReflectedPoissonBDBridgeCollate, PoissonMeanConstrainedBDBridgeCollate
+from .bridges import PoissonBDBridgeCollate, ReflectedPoissonBDBridgeCollate, PoissonMeanConstrainedBDBridgeCollate
 from abc import ABC, abstractmethod
 
 

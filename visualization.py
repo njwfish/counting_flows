@@ -7,7 +7,7 @@ Provides comprehensive plotting and debugging visualization for count flows.
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
-from .scheduling import make_time_spacing_schedule, make_phi_schedule
+from .scheduling import make_time_spacing_schedule
 from .samplers import bd_reverse_sampler, reflected_bd_reverse_sampler
 
 
@@ -330,8 +330,8 @@ def plot_full_reverse_trajectories(trajectory, x_hat_trajectory, x0_target, x1_b
     x_hat_array = np.array([step.cpu().numpy() for step in x_hat_trajectory])  # [K, B, d]
     
     B, d = x0_target.shape
-    time_steps = np.linspace(1.0, 0.0, len(traj_array))  # Reverse time from 1 to 0
-    x_hat_time_steps = np.linspace(1.0, 0.0, len(x_hat_array))  # Match x_hat_array length
+    time_steps = np.linspace(0.0, 1.0, len(traj_array))  # Reverse time from 1 to 0
+    x_hat_time_steps = np.linspace(0.0, 1.0, len(x_hat_array))  # Match x_hat_array length
     
     # Plot first 4 dimensions
     n_dims_to_plot = min(4, d)
@@ -360,7 +360,7 @@ def plot_full_reverse_trajectories(trajectory, x_hat_trajectory, x0_target, x1_b
         ax.axhline(y=x1_mean, color='orange', linestyle='--', linewidth=2, label='x₁ mean')
         
         ax.set_title(f'x_t Trajectories - Dimension {dim}')
-        ax.set_xlabel('Time t (1→0)')
+        ax.set_xlabel('Time t')
         ax.set_ylabel('Count value')
         ax.grid(True, alpha=0.3)
         # Don't invert x-axis since time_steps already goes from 1 to 0

@@ -345,11 +345,6 @@ def main():
         config_str = f"{args.arch}_{args.bridge}_{args.r_schedule}_{args.time_schedule}"
         sample_config_str = f"{args.arch}_{sample_bridge_mode}_{sample_r_schedule}_{sample_time_schedule}"
         
-        # Plot schedule comparisons first
-        fig = plot_schedule_comparison(K=args.steps, title="R(t) Schedule Comparison")
-        plt.savefig(f"{plot_dirs['schedules']}/r_comparison.png", dpi=150, bbox_inches='tight')
-        plt.close()
-        
         fig = plot_time_spacing_comparison(K=args.steps, title="Time Spacing Comparison") 
         plt.savefig(f"{plot_dirs['schedules']}/time_comparison.png", dpi=150, bbox_inches='tight')
         plt.close()
