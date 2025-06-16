@@ -15,17 +15,6 @@ from typing import Tuple
 import torch
 from torch.distributions import Multinomial
 
-
-
-# ------------------------------------------------------------------------------
-#  Core BD step (unreflected)
-# ------------------------------------------------------------------------------
-import torch
-from torch.distributions import Multinomial, Binomial
-
-# --------------------------------------------------------------------
-#  1) Core BD reverse‐kernel step (unreflected)
-# --------------------------------------------------------------------
 def bd_step(
     x_t:    torch.LongTensor,   # (B,d) current state at time t
     x0_hat: torch.LongTensor,   # (B,d) model prediction of X₀
@@ -60,35 +49,7 @@ def bd_step(
     x_s = x0_hat + 2*B_s - N_s
     return x_s, N_s, B_s
 
-# --------------------------------------------------------------------
-#  Standard BD reverse‑time sampler WITH slack‑pair feature
-# --------------------------------------------------------------------
-# ──────────────────────────────────────────────────────────────────────────────
-#  Required imports + helper
-# ──────────────────────────────────────────────────────────────────────────────
-import torch
-from torch.distributions import Binomial
 
-from .bridges import manual_hypergeometric
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-#  Reverse–time sampler for the *standard* Birth–Death bridge
-# ──────────────────────────────────────────────────────────────────────────────
-import torch
-from torch.distributions import Binomial
-from .bridges import manual_hypergeometric
-from .scheduling import make_lambda_schedule
-
-# ----------------------------------------------------------------------
-#  helper: Hypergeometric via numpy (unchanged)
-# ----------------------------------------------------------------------
-from .bridges import manual_hypergeometric
-from torch.distributions import Binomial
-
-# ----------------------------------------------------------------------
-#  corrected sampler
-# ----------------------------------------------------------------------
 @torch.no_grad()
 def bd_reverse_sampler(
     x1:  torch.LongTensor,          # (B,d) observed X₁
@@ -179,13 +140,6 @@ def bd_reverse_sampler(
     return tuple(outs) if len(outs) > 1 else x_t
 
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Mean-constrained BD reverse sampler (updated to new slack-pair logic)
-# ─────────────────────────────────────────────────────────────────────────────
-# ---------------------------------------------------------------------
-#  mean–interpolated BD bridge  (correct slack handling)
-# ---------------------------------------------------------------------
 @torch.no_grad()
 def bd_reverse_with_interpolated_mean(
     x1: torch.LongTensor,                   # (B,d) terminal counts
@@ -317,8 +271,6 @@ def bd_reverse_with_interpolated_mean(
     if return_x_hat and return_M:
         return x_t, xhat_traj, M_traj
     return x_t
-
-
 
 
 def reflected_bd_reverse_sampler(
