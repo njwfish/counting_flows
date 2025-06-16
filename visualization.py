@@ -7,6 +7,7 @@ Provides comprehensive plotting and debugging visualization for count flows.
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy import stats
 from .scheduling import make_time_spacing_schedule
 from .samplers import bd_reverse_sampler, reflected_bd_reverse_sampler
 
@@ -114,108 +115,6 @@ def plot_time_spacing_comparison(K=50, title="Time Spacing Comparison"):
     return fig
 
 
-def plot_reverse_trajectory(x0, x1, z, model, K=30, mode="poisson", device="cuda", n_trajectories=5, 
-                           r_min=1.0, r_max=20.0, r_schedule="linear", time_schedule="uniform", 
-                           bd_r=1.0, bd_beta=1.0, lam_p0=8.0, lam_p1=8.0, lam_m0=8.0, lam_m1=8.0, 
-                           bd_schedule_type="constant", lam0=8.0, lam1=8.0, **schedule_kwargs):
-    """Plot the reverse sampling trajectory"""
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    fig.suptitle(f"Reverse Sampling Trajectories ({mode} bridge)")
-    
-    # Get the time schedule used in sampling
-    if mode in ["poisson_bd", "polya_bd"]:
-        # For BD bridges, use the grid from lambda schedule
-        from .scheduling import make_lambda_schedule
-        grid, _, _, _, _ = make_lambda_schedule(K, lam_p0, lam_p1, lam_m0, lam_m1, bd_schedule_type)
-        time_points = torch.flip(grid, [0])  # Reverse for backward process
-    else:
-        time_points = make_time_spacing_schedule(K, time_schedule, **schedule_kwargs)
-        time_points = torch.flip(time_points, [0])  # Reverse for backward process
-    
-    # Batch the sampling by stacking inputs
-    x_start_batch = x1[:n_trajectories].clone().to(device)  # Take first n_trajectories samples
-    z_start_batch = z[:n_trajectories].clone().to(device) if len(z) >= n_trajectories else z[:1].repeat(n_trajectories, 1).to(device)
-    
-    # Ensure we have enough samples
-    if len(x_start_batch) < n_trajectories:
-        # Repeat samples if we don't have enough
-        repeats = (n_trajectories + len(x_start_batch) - 1) // len(x_start_batch)
-        x_start_batch = x_start_batch.repeat(repeats, 1)[:n_trajectories]
-        if len(z_start_batch) < n_trajectories:
-            z_start_batch = z_start_batch.repeat(repeats, 1)[:n_trajectories]
-    
-    # Get the full reverse trajectory with intermediate steps (batched)
-    reverse_sampler = reflected_bd_reverse_sampler if mode == "reflected_bd" else bd_reverse_sampler
-    x_final, trajectory, x_hat_trajectory = reverse_sampler(
-        x_start_batch, z_start_batch, model,
-        K=K, device=device,
-        lam0=lam0, lam1=lam1,
-        schedule_type=bd_schedule_type,
-        time_schedule=time_schedule,
-        return_trajectory=True,
-        return_x_hat=True,
-    )
-    
-    # Convert trajectories to numpy arrays for plotting
-    # trajectory is a list of tensors, each of shape [n_trajectories, d]
-    traj_array = np.array([step.numpy() for step in trajectory])  # Shape: [K+1, n_trajectories, d]
-    x_hat_array = np.array([step.numpy() for step in x_hat_trajectory])  # Shape: [K, n_trajectories, d]
-    
-    # Convert time points to numpy for plotting
-    time_np = time_points.numpy()
-    
-    # Ensure trajectory and time points have compatible lengths
-    traj_length = len(traj_array)
-    x_hat_length = len(x_hat_array)
-    time_length = len(time_np)
-    
-    print(f"Debug: trajectory length = {traj_length}, x_hat length = {x_hat_length}, time length = {time_length}")
-    
-    # Use the minimum length to avoid index errors
-    min_length = min(time_length, traj_length)
-    if min_length > 0:
-        time_np = time_np[:min_length]
-        traj_array = traj_array[:min_length]
-        # x_hat is one step shorter (no prediction at final step)
-        x_hat_time_np = time_np[:-1] if len(time_np) > 1 else time_np
-        x_hat_array = x_hat_array[:len(x_hat_time_np)]
-    else:
-        print("Warning: Empty trajectories or time points")
-        return fig
-    
-    # Plot trajectories for each dimension
-    for dim in range(min(4, x1.shape[1])):
-        ax = axes[dim//2, dim%2]
-        
-        # Plot linear interpolant reference (dotted black line)
-        x1_val = x_start_batch[0, dim].cpu().numpy()
-        x0_mean = x_final[0, dim].cpu().numpy()  # Final point for first trajectory
-        linear_interp = np.linspace(x1_val, x0_mean, len(time_np))
-        ax.plot(time_np, linear_interp, 'k--', alpha=0.5, linewidth=2, label='Linear interpolant')
-        
-        # Plot actual trajectories (x values)
-        for traj_idx in range(n_trajectories):
-            ax.plot(time_np, traj_array[:, traj_idx, dim], 'o-', alpha=0.7, linewidth=2, 
-                   markersize=4, label=f'Trajectory {traj_idx+1}' if traj_idx < 3 else "")
-        
-        # Plot x_hat predictions (smaller markers, different style)
-        for traj_idx in range(min(3, n_trajectories)):  # Only show first 3 to avoid clutter
-            ax.plot(x_hat_time_np, x_hat_array[:, traj_idx, dim], 's--', alpha=0.5, linewidth=1, 
-                   markersize=3, label=f'x̂₀ pred {traj_idx+1}' if traj_idx < 3 else "")
-        
-        ax.set_title(f'Dimension {dim}')
-        ax.set_xlabel('Time t')
-        ax.set_ylabel('Count value')
-        ax.grid(True, alpha=0.3)
-        if dim == 0:  # Only show legend for first plot to avoid clutter
-            ax.legend(fontsize='small', loc='best')
-        
-        # Invert x-axis since we're going backwards in time (t=1 → t=0)
-        ax.invert_xaxis()
-    
-    plt.tight_layout()
-    return fig
-
 
 def plot_generation_analysis(x0_samples, x0_target, x1_batch, title="Generation Analysis"):
     """Analyze the quality of generated samples"""
@@ -308,30 +207,34 @@ def plot_loss_curve(losses, title="Training Loss"):
     return fig
 
 
-def plot_full_reverse_trajectories(trajectory, x_hat_trajectory, x0_target, x1_batch, mode, K, title="Full Reverse Trajectories"):
+def plot_full_reverse_trajectories(trajectory, x_hat_trajectory, M_trajectory, x0_target, x1_batch, mode, K, title="Full Reverse Trajectories"):
     """
     Plot reverse trajectories for all samples with elegant handling of large datasets.
     
     Args:
         trajectory: List of tensors, each of shape [B, d] representing x_t at each time step
         x_hat_trajectory: List of tensors, each of shape [B, d] representing x̂₀ predictions
+        M_trajectory: List of tensors, each of shape [B, d] representing M_t at each time step
         x0_target: Tensor of shape [B, d] - target x0 values
         x1_batch: Tensor of shape [B, d] - starting x1 values  
         mode: String indicating bridge type
         K: Number of time steps
         title: Plot title
     """
-    fig, axes = plt.subplots(2, 4, figsize=(20, 10))
+    # Always create 3x4 subplot grid for x_t, x̂₀, and M_t
+    fig, axes = plt.subplots(3, 4, figsize=(20, 15))
     fig.suptitle(title, fontsize=16)
     
     # Convert trajectory data to numpy arrays
     # trajectory: list of [B, d] tensors -> [K+1, B, d] array
     traj_array = np.array([step.cpu().numpy() for step in trajectory])  # [K+1, B, d]
     x_hat_array = np.array([step.cpu().numpy() for step in x_hat_trajectory])  # [K, B, d]
+    M_array = np.array([step.cpu().numpy() for step in M_trajectory])  # [K, B, d]
     
     B, d = x0_target.shape
     time_steps = np.linspace(0.0, 1.0, len(traj_array))  # Reverse time from 1 to 0
     x_hat_time_steps = np.linspace(0.0, 1.0, len(x_hat_array))  # Match x_hat_array length
+    M_time_steps = np.linspace(0.0, 1.0, len(M_array))  # Match M_array length
     
     # Plot first 4 dimensions
     n_dims_to_plot = min(4, d)
@@ -367,7 +270,7 @@ def plot_full_reverse_trajectories(trajectory, x_hat_trajectory, x0_target, x1_b
         if dim == 0:
             ax.legend(fontsize='small', loc='best')
     
-    # Bottom row: x̂₀ predictions
+    # Second row: x̂₀ predictions
     for dim in range(n_dims_to_plot):
         ax = axes[1, dim]
         
@@ -395,6 +298,170 @@ def plot_full_reverse_trajectories(trajectory, x_hat_trajectory, x0_target, x1_b
         # Don't invert x-axis since x_hat_time_steps already goes from 1 to 0
         if dim == 0:
             ax.legend(fontsize='small', loc='best')
+    
+    # Third row: M_t trajectories
+    for dim in range(n_dims_to_plot):
+        ax = axes[2, dim]
+        
+        # Plot all M_t trajectories with low alpha
+        for b in range(min(B, 1000)):  # Limit to 1000 trajectories for performance
+            alpha = 0.05 if B > 100 else 0.1
+            ax.plot(M_time_steps, M_array[:, b, dim], 'orange', alpha=alpha, linewidth=0.5)
+        
+        # Plot percentiles for M_t
+        M_percentiles = np.percentile(M_array[:, :, dim], [10, 25, 50, 75, 90], axis=1)
+        ax.plot(M_time_steps, M_percentiles[2], 'orange', linewidth=2, label='Median M_t')
+        ax.fill_between(M_time_steps, M_percentiles[1], M_percentiles[3], 
+                       alpha=0.4, color='orange', label='25-75%')
+        ax.fill_between(M_time_steps, M_percentiles[0], M_percentiles[4], 
+                       alpha=0.3, color='orange', label='10-90%')
+        
+        ax.set_title(f'M_t Trajectories - Dimension {dim}')
+        ax.set_xlabel('Time t (1→0)')
+        ax.set_ylabel('M_t value')
+        ax.grid(True, alpha=0.3)
+        # Don't invert x-axis since M_time_steps already goes from 1 to 0
+        if dim == 0:
+            ax.legend(fontsize='small', loc='best')
+    
+    plt.tight_layout()
+    return fig
+
+
+def plot_true_marginal_distributions(x0_batch, x1_batch, z_batch, bridge_collate, times=None, 
+                                    n_samples=1000, title="True Bridge Marginals"):
+    """
+    Plot true x_t and M_t marginal distributions as line plots over time.
+    Format exactly matches plot_full_reverse_trajectories for direct comparison.
+    
+    Args:
+        x0_batch: Tensor of shape [B, d] - x0 samples
+        x1_batch: Tensor of shape [B, d] - x1 samples  
+        z_batch: Tensor of shape [B, z_dim] - context
+        bridge_collate: Bridge collate object (e.g., PoissonBDBridgeCollate)
+        times: List of time points to sample at (if None, uses dense sampling)
+        n_samples: Number of samples to generate for each time point
+        title: Plot title
+    """
+    # Use dense time sampling for smooth line plots (like reverse trajectories)
+    if times is None:
+        times = np.linspace(0.0, 1.0, 21)  # Dense sampling: 21 points from 0 to 1
+    else:
+        times = np.array(times)
+    
+    # Match the exact layout of plot_full_reverse_trajectories
+    fig, axes = plt.subplots(3, 4, figsize=(20, 15))
+    fig.suptitle(title, fontsize=16)
+    
+    d = x0_batch.shape[1]
+    n_dims_to_plot = min(4, d)
+    
+    # Collect samples for all time points
+    print(f"Sampling bridge marginals at {len(times)} time points...")
+    all_x_t_samples = []  # List of [n_samples, d] tensors
+    all_M_samples = []    # List of [n_samples, d] tensors
+    
+    for i, t_val in enumerate(times):
+        if i % 5 == 0:  # Progress indicator
+            print(f"  Progress: {i+1}/{len(times)} (t={t_val:.2f})")
+    
+        # Create batch data for this time point
+        batch_data = []
+        for j in range(n_samples):
+            idx = j % len(x0_batch)  # Cycle through available data
+            batch_data.append({
+                'x0': x0_batch[idx],
+                'x1': x1_batch[idx], 
+                'z': z_batch[idx]
+            })
+        
+        # Use the bridge directly with specified time
+        result = bridge_collate(batch_data, t_target=t_val)
+        
+        # Extract x_t and M_t
+        x_t = result['x_t']
+        M_t = result.get('M', torch.zeros_like(x_t))  # Some bridges might not have M
+        
+        # Store samples
+        all_x_t_samples.append(x_t.cpu())
+        all_M_samples.append(M_t.cpu())
+                
+    
+    # Convert to arrays for plotting: [time_steps, n_samples, d]
+    x_t_array = np.array([step.numpy() for step in all_x_t_samples])  # [T, B, d]
+    M_array = np.array([step.numpy() for step in all_M_samples])      # [T, B, d]
+    
+    print(f"Collected samples shape: x_t={x_t_array.shape}, M_t={M_array.shape}")
+    
+    # Top row: x_t evolution over time (exactly like x_t trajectories)
+    for dim in range(n_dims_to_plot):
+        ax = axes[0, dim]
+        
+        # Plot percentiles over time (exactly like reverse trajectories)
+        traj_percentiles = np.percentile(x_t_array[:, :, dim], [10, 25, 50, 75, 90], axis=1)
+        ax.plot(times, traj_percentiles[2], 'r-', linewidth=2, label='Median x_t')
+        ax.fill_between(times, traj_percentiles[1], traj_percentiles[3], 
+                       alpha=0.4, color='red', label='25-75%')
+        ax.fill_between(times, traj_percentiles[0], traj_percentiles[4], 
+                       alpha=0.3, color='red', label='10-90%')
+        
+        # Plot target mean as reference
+        target_mean = x0_batch[:, dim].float().mean().cpu().numpy()
+        x1_mean = x1_batch[:, dim].float().mean().cpu().numpy()
+        ax.axhline(y=target_mean, color='green', linestyle='--', linewidth=2, label='Target x₀ mean')
+        ax.axhline(y=x1_mean, color='orange', linestyle='--', linewidth=2, label='x₁ mean')
+        
+        ax.set_title(f'x_t Evolution - Dimension {dim}')
+        ax.set_xlabel('Time t')
+        ax.set_ylabel('Count value')
+        ax.grid(True, alpha=0.3)
+        if dim == 0:
+            ax.legend(fontsize='small', loc='best')
+    
+    # Middle row: Linear interpolation reference (like x̂₀ predictions)
+    for dim in range(n_dims_to_plot):
+        ax = axes[1, dim]
+        
+        # Plot linear interpolation between x0 and x1 means
+        target_mean = x0_batch[:, dim].float().mean().cpu().numpy()
+        x1_mean = x1_batch[:, dim].float().mean().cpu().numpy()
+        linear_interp = (1 - times) * target_mean + times * x1_mean
+        
+        ax.plot(times, linear_interp, 'purple', linewidth=2, label='Linear interpolation')
+        ax.axhline(y=target_mean, color='green', linestyle='--', linewidth=2, label='Target x₀ mean')
+        
+        ax.set_title(f'Reference Interpolation - Dimension {dim}')
+        ax.set_xlabel('Time t')
+        ax.set_ylabel('Expected value')
+        ax.grid(True, alpha=0.3)
+        if dim == 0:
+            ax.legend(fontsize='small', loc='best')
+    
+    # Bottom row: M_t evolution over time (exactly like M_t trajectories)
+    for dim in range(n_dims_to_plot):
+        ax = axes[2, dim]
+        
+        # Check if we have meaningful M_t data
+        if M_array.max() > 0:
+            # Plot percentiles over time (exactly like reverse trajectories)
+            M_percentiles = np.percentile(M_array[:, :, dim], [10, 25, 50, 75, 90], axis=1)
+            ax.plot(times, M_percentiles[2], 'orange', linewidth=2, label='Median M_t')
+            ax.fill_between(times, M_percentiles[1], M_percentiles[3], 
+                           alpha=0.4, color='orange', label='25-75%')
+            ax.fill_between(times, M_percentiles[0], M_percentiles[4], 
+                           alpha=0.3, color='orange', label='10-90%')
+            
+            ax.set_title(f'M_t Evolution - Dimension {dim}')
+            ax.set_xlabel('Time t')
+            ax.set_ylabel('M_t value')
+            ax.grid(True, alpha=0.3)
+            if dim == 0:
+                ax.legend(fontsize='small', loc='best')
+        else:
+            # If M_t not available, show placeholder
+            ax.text(0.5, 0.5, f'M_t not available\nfor this bridge type', 
+                   transform=ax.transAxes, ha='center', va='center')
+            ax.set_title(f'M_t Evolution - Dimension {dim}')
     
     plt.tight_layout()
     return fig

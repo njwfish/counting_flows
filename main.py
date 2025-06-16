@@ -15,11 +15,43 @@ from .models import NBPosterior, BetaBinomialPosterior, MLERegressor, ZeroInflat
 from .training import train_model, create_training_dataloader
 from .samplers import bd_reverse_sampler, reflected_bd_reverse_sampler, bd_reverse_with_interpolated_mean
 from .visualization import (
-    plot_schedule_comparison, plot_time_spacing_comparison,
-    plot_reverse_trajectory, plot_generation_analysis, plot_loss_curve,
-    plot_full_reverse_trajectories
+    plot_time_spacing_comparison,
+    plot_generation_analysis, plot_loss_curve,
+    plot_full_reverse_trajectories, plot_true_marginal_distributions
 )
-from .bridges import PoissonMeanConstrainedBDBridgeCollate
+from .bridges import PoissonMeanConstrainedBDBridgeCollate, PoissonBDBridgeCollate, ReflectedPoissonBDBridgeCollate
+
+
+def load_model_checkpoint(model, checkpoint_path, device):
+    """Load model from checkpoint if it exists"""
+    if os.path.exists(checkpoint_path):
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location=device)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            step = checkpoint.get('step', 0)
+            losses = checkpoint.get('losses', [])
+            print(f"Loaded checkpoint from {checkpoint_path} (step {step})")
+            model = model.to(device)
+            return model, step, losses
+        except Exception as e:
+            print(f"Failed to load checkpoint {checkpoint_path}: {e}")
+            return model, 0, []
+    return model, 0, []
+
+
+def find_latest_checkpoint(checkpoint_dir):
+    """Find the latest checkpoint in the directory"""
+    checkpoint_dir = Path(checkpoint_dir)
+    if not checkpoint_dir.exists():
+        return None
+    
+    checkpoints = list(checkpoint_dir.glob("model_step_*.pt"))
+    if not checkpoints:
+        return None
+    
+    # Sort by step number to get the latest
+    checkpoints.sort(key=lambda x: int(x.stem.split('_')[-1]))
+    return checkpoints[-1]
 
 
 def setup_plot_directories(base_dir="plots"):
@@ -54,7 +86,7 @@ def main():
     
     # Quick mode adjustments
     if args.quick:
-        args.iterations = 5_000
+        args.iterations = 10_000
         args.gen_samples = 1000
     
     # Set sampling schedules
@@ -237,7 +269,7 @@ def main():
             lam_m0=args.lam_m0,
             lam_m1=args.lam_m1,
             schedule_type=args.bd_schedule,
-            mh_sweeps=getattr(args, "mh_sweeps", 5),
+            mh_sweeps=getattr(args, "mh_sweeps", 10),
             **schedule_kwargs
         )
         print(f"Bridge: Mean-Constrained Poisson Birth-Death for training")
@@ -248,14 +280,43 @@ def main():
     else:
         raise ValueError(f"Unknown bridge type: {args.bridge}")
     
+    # Setup checkpoints and model loading
+    checkpoint_dir = "checkpoints"
+    config_str = f"{args.arch}_{args.bridge}_{args.r_schedule}_{args.time_schedule}"
+    model_checkpoint_dir = f"{checkpoint_dir}/{config_str}"
+    
+    start_step = 0
+    initial_losses = []
+    
+    # Try to load model if --load flag is set
+    if args.load:
+        latest_checkpoint = find_latest_checkpoint(model_checkpoint_dir)
+        if latest_checkpoint:
+            model, start_step, initial_losses = load_model_checkpoint(model, latest_checkpoint, device)
+            print(f"Resuming training from step {start_step}")
+        else:
+            print(f"No checkpoint found in {model_checkpoint_dir}, starting from scratch")
+    
+    # Configure checkpoint saving (save every 10,000 steps)
+    save_every = max(args.iterations // 10, 1000)  # Save at least every 1000 steps, or 10 times during training
+    
     # Train
     print(f"\nTraining model...")
-    model, losses = train_model(
-        model, train_dataloader,
-        num_iterations=args.iterations,
-        lr=args.lr, 
-        device=device
-    )
+    if start_step < args.iterations:
+        remaining_iterations = args.iterations - start_step
+        print(f"Training for {remaining_iterations} more iterations (total: {args.iterations})")
+        model, new_losses = train_model(
+            model, train_dataloader,
+            num_iterations=remaining_iterations,
+            lr=args.lr, 
+            device=device,
+            save_every=save_every,
+            checkpoint_dir=model_checkpoint_dir
+        )
+        losses = initial_losses + new_losses
+    else:
+        print(f"Model already trained for {start_step} steps, skipping training")
+        losses = initial_losses
     
     # Generate samples
     print(f"\nGenerating {args.gen_samples} samples...")
@@ -295,7 +356,7 @@ def main():
         if sample_bridge_mode == "poisson_bd_mean":
             mu0 = x0_target.float().mean(0)  # (d,)
             sweeps = getattr(args, "mh_sweeps", 10)
-            x0_samples, trajectory, x_hat_trajectory = reverse_sampler(
+            x0_samples, trajectory, x_hat_trajectory, M_trajectory = reverse_sampler(
                 x1_batch, z_batch, model,
                 K=args.steps,
                 lam0=args.lam_p0,
@@ -306,9 +367,10 @@ def main():
                 schedule_type=args.bd_schedule,
                 return_trajectory=True,
                 return_x_hat=True,
+                return_M=True,
             )
         else:
-            x0_samples, trajectory, x_hat_trajectory = reverse_sampler(
+            x0_samples, trajectory, x_hat_trajectory, M_trajectory = reverse_sampler(
                 x1_batch, z_batch, model,
                 K=args.steps,
                 device=device,
@@ -317,6 +379,8 @@ def main():
                 lam1=args.lam1,
                 return_trajectory=True,
                 return_x_hat=True,
+                return_M=True,
+                # x0=x0_target,
             )
         
         # Compute statistics
@@ -358,11 +422,13 @@ def main():
         fig = plot_full_reverse_trajectories(
             trajectory=trajectory,
             x_hat_trajectory=x_hat_trajectory,
+            M_trajectory=M_trajectory,
             x0_target=x0_target,
             x1_batch=x1_batch,
             mode=sample_bridge_mode,
             K=args.steps,
             title=f"Full Reverse Trajectories ({sample_bridge_mode} bridge)"
+            
         )
         plt.savefig(f"{plot_dirs['sampling']}/trajectories_{sample_config_str}.png", dpi=150, bbox_inches='tight')
         plt.close()
@@ -372,6 +438,80 @@ def main():
                                      title=f"Generation Analysis ({args.arch} + {sample_bridge_mode}, {sample_r_schedule}, {sample_time_schedule})")
         plt.savefig(f"{plot_dirs['analysis']}/generation_{sample_config_str}.png", dpi=150, bbox_inches='tight')
         plt.close()
+        
+        # Plot true marginal distributions from bridge
+        bridge_collate = None
+        if args.bridge == "poisson_bd":
+            bridge_collate = PoissonBDBridgeCollate(
+                n_steps=args.steps,
+                lam_p0=args.lam_p0,
+                lam_p1=args.lam_p1,
+                lam_m0=args.lam_m0,
+                lam_m1=args.lam_m1,
+                schedule_type=args.bd_schedule,
+                time_schedule=args.time_schedule,
+                homogeneous_time=False,  # We want different times
+                **schedule_kwargs
+            )
+        elif args.bridge == "polya_bd":
+            # Note: polya_bd uses the same collate as poisson_bd
+            bridge_collate = PoissonBDBridgeCollate(
+                n_steps=args.steps,
+                lam_p0=args.lam_p0,
+                lam_p1=args.lam_p1,
+                lam_m0=args.lam_m0,
+                lam_m1=args.lam_m1,
+                schedule_type=args.bd_schedule,
+                time_schedule=args.time_schedule,
+                homogeneous_time=False,  # We want different times
+                **schedule_kwargs
+            )
+        elif args.bridge == "reflected_bd":
+            bridge_collate = ReflectedPoissonBDBridgeCollate(
+                n_steps=args.steps,
+                lam_p0=args.lam0,  # reflected_bd uses same lambda for both
+                lam_p1=args.lam1,
+                lam_m0=args.lam0,
+                lam_m1=args.lam1,
+                schedule_type=args.bd_schedule,
+                time_schedule=args.time_schedule,
+                homogeneous_time=False,  # We want different times
+                **schedule_kwargs
+            )
+        elif args.bridge == "poisson_bd_mean":
+            bridge_collate = PoissonMeanConstrainedBDBridgeCollate(
+                n_steps=args.steps,
+                lam_p0=args.lam_p0,
+                lam_p1=args.lam_p1,
+                lam_m0=args.lam_m0,
+                lam_m1=args.lam_m1,
+                schedule_type=args.bd_schedule,
+                time_schedule=args.time_schedule,
+                homogeneous_time=False,  # We want different times
+                mh_sweeps=getattr(args, "mh_sweeps", 5),
+                **schedule_kwargs
+            )
+        
+        if bridge_collate is not None:
+            try:
+                fig = plot_true_marginal_distributions(
+                    x0_batch=x0_target[:100],  # Use subset for speed
+                    x1_batch=x1_batch[:100],
+                    z_batch=z_batch[:100],
+                    bridge_collate=bridge_collate,
+                    times=[0.0, 0.25, 0.5, 0.75, 1.0],
+                    n_samples=500,
+                    title=f"True Bridge Marginals ({args.bridge})"
+                )
+                plt.savefig(f"{plot_dirs['analysis']}/bridge_marginals_{config_str}.png", dpi=150, bbox_inches='tight')
+                plt.close()
+                print(f"Bridge marginal distributions plotted.")
+            except Exception as e:
+                print(f"Could not plot bridge marginals: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print(f"Bridge marginal plots not supported for bridge type: {args.bridge}")
         
         print(f"Plots saved to organized directories:")
         print(f"  Schedules: {plot_dirs['schedules']}/")

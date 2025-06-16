@@ -5,13 +5,27 @@ Provides training loop and utilities for count-based flow matching models.
 """
 
 import torch
+import os
+from pathlib import Path
 from .datasets import create_dataloader, InfiniteDataLoader
+
+
+def save_model_checkpoint(model, optimizer, step, losses, checkpoint_dir):
+    """Save model checkpoint"""
+    checkpoint_path = checkpoint_dir / f"model_step_{step}.pt"
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'step': step,
+        'losses': losses
+    }, checkpoint_path)
+    print(f"  Saved checkpoint: {checkpoint_path}")
 
 
 def train_model(
     model, dataloader, 
     num_iterations=10000, print_interval=2000,
-    lr=2e-3, device="cuda"
+    lr=2e-3, device="cuda", save_every=None, checkpoint_dir=None
 ):
     """
     Unified training function for count-based flow matching models using DataLoaders
@@ -22,6 +36,8 @@ def train_model(
         num_iterations: Number of training iterations
         lr: Learning rate
         device: Device for computation
+        save_every: Save model every N steps (None to disable saving)
+        checkpoint_dir: Directory to save checkpoints
     
     Returns:
         model: Trained model
@@ -29,6 +45,10 @@ def train_model(
     """
     model = model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    
+    # Setup checkpoint directory if saving is enabled
+    if save_every is not None and checkpoint_dir is not None:
+        Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
     
     # Make dataloader infinite for training
     infinite_loader = InfiniteDataLoader(dataloader)
@@ -48,21 +68,23 @@ def train_model(
         z = batch['z'].to(device)
         t = batch['t'].to(device).unsqueeze(-1)  # Add dimension for broadcasting
 
-        if step == 0:
-            print(
-                x0.float().mean(0), x1.float().mean(0), "\n",
-                x_t.float().mean(0), x0.float().mean(0) * (1 - t.float().mean()) + x1.float().mean(0) * t.float().mean(), "\n",
-                t.float().mean(), z.float().mean(0)
-            )
         # Training step
         optimizer.zero_grad()
-        loss = model.loss(x0, x_t, M_t, z, t)
+        loss, x0_preds = model.loss(x0, x_t, M_t, z, t)
         loss.backward()
         optimizer.step()
+
+
+        if step % 100 == 0:
+            print(f"t: {t.min()}, {t.max()}, M_t: {M_t.min()}, {M_t.max()}, x_0: {torch.quantile(x0.float(), 0.25)}, {torch.quantile(x0.float(), 0.75)}, x0_preds: {torch.quantile(x0_preds.float(), 0.25)}, {torch.quantile(x0_preds.float(), 0.75)}")
         
         current_loss = loss.item()
         losses.append(current_loss)
         interval_losses.append(current_loss)
+        
+        # Save checkpoint if enabled
+        if save_every is not None and checkpoint_dir is not None and (step + 1) % save_every == 0:
+            save_model_checkpoint(model, optimizer, step + 1, losses, Path(checkpoint_dir))
         
         # Print average loss over interval
         if step % print_interval == 0 and step > 0:
@@ -71,6 +93,10 @@ def train_model(
             interval_losses = []
         elif step == 0:
             print(f"  Step {step:5d}: loss = {current_loss:.4f}")
+    
+    # Save final checkpoint if enabled
+    if save_every is not None and checkpoint_dir is not None:
+        save_model_checkpoint(model, optimizer, num_iterations, losses, Path(checkpoint_dir))
     
     # Print final average if there are remaining losses
     if interval_losses:

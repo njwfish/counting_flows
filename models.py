@@ -545,5 +545,5 @@ class MMDPosterior(BaseCountModel):
         mean_pd   = pdists.mean(dim=1)                                # [n]
         term_int  = (λ / 2.0) * mean_pd                               # [n]
 
-        return (term_conf - term_int).mean()
+        return (term_conf - term_int).mean(), x0_preds.mean(dim=1)
 

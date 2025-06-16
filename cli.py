@@ -94,7 +94,7 @@ def parse_args():
     parser.add_argument("--lr", "--learning-rate", type=float, default=2e-4, help="Learning rate")
     parser.add_argument("--batch-size", "-B", type=int, default=128, help="Batch size")
     parser.add_argument("--steps", "--n-steps", type=int, default=30, help="Number of diffusion steps")
-    parser.add_argument("--iterations", "-i", type=int, default=10_000, help="Training iterations")
+    parser.add_argument("--iterations", "-i", type=int, default=100_000, help="Training iterations")
     parser.add_argument("--hidden", type=int, default=128, help="Hidden layer size")
     
     # DataLoader options
@@ -132,5 +132,8 @@ def parse_args():
     
     # Device
     parser.add_argument("--device", choices=["cuda", "cpu", "auto"], default="auto", help="Device to use")
+    
+    # Model loading/saving
+    parser.add_argument("--load", action="store_true", help="Load model from checkpoint if available")
     
     return parser.parse_args() 
