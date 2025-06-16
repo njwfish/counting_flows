@@ -185,7 +185,6 @@ def mh_mean_constrained_update(
             alpha = (logp_prop - logp_curr).exp().clamp(max=1.0)
             if torch.rand(1, device=device) < alpha:
                 x = x_prop
-
     return x
 
 

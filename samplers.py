@@ -10,11 +10,6 @@ from torch.distributions import Binomial
 from .scheduling import make_time_spacing_schedule, make_lambda_schedule
 from .bridges import manual_hypergeometric, mh_mean_constrained_update
 
-from typing import Tuple
-
-import torch
-from torch.distributions import Multinomial
-
 def bd_step(
     x_t:    torch.LongTensor,   # (B,d) current state at time t
     x0_hat: torch.LongTensor,   # (B,d) model prediction of X₀
