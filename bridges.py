@@ -1,192 +1,8 @@
 import torch
-from torch.distributions import NegativeBinomial
+
 import numpy as np
 from .scheduling import make_time_spacing_schedule, make_lambda_schedule
-from torch.distributions import Multinomial
-
-def manual_hypergeometric(total_count, num_successes, num_draws):
-    """
-    Vectorized implementation of hypergeometric sampling using numpy broadcasting.
-    
-    Args:
-        total_count: Total population size (array-like)
-        num_successes: Number of success items in population (array-like)
-        num_draws: Number of items drawn (array-like)
-    
-    Returns:
-        Number of successes in the drawn sample (same shape as inputs)
-    """
-    # Convert to numpy arrays for vectorized operations
-    total_count = np.asarray(total_count)
-    num_successes = np.asarray(num_successes)
-    num_draws = np.asarray(num_draws)
-    
-    # Bounds checking to prevent invalid hypergeometric parameters
-    num_successes = np.clip(num_successes, 0, total_count)
-    num_draws = np.clip(num_draws, 0, total_count)
-    
-    # Handle edge cases
-    mask_zero_draws = (num_draws == 0)
-    mask_zero_successes = (num_successes == 0)
-    mask_draws_ge_total = (num_draws >= total_count)
-    mask_successes_ge_total = (num_successes >= total_count)
-    
-    # Use numpy's vectorized hypergeometric
-    result = np.zeros_like(num_draws)
-    
-    # Only call hypergeometric for valid cases
-    valid_mask = ~(mask_zero_draws | mask_zero_successes | mask_draws_ge_total | mask_successes_ge_total)
-    
-    if np.any(valid_mask):
-        result[valid_mask] = np.random.hypergeometric(
-            num_successes[valid_mask], 
-            total_count[valid_mask] - num_successes[valid_mask], 
-            num_draws[valid_mask]
-        )
-    
-    # Handle edge cases
-    result[mask_zero_draws] = 0
-    result[mask_zero_successes] = 0
-    result[mask_draws_ge_total] = num_successes[mask_draws_ge_total]
-    result[mask_successes_ge_total] = num_draws[mask_successes_ge_total]
-    
-    return result
-
-# -----------------------------------------------------------------------------
-# 1) Sum‐constrained Multinomial proposal
-# -----------------------------------------------------------------------------
-
-import torch
-from torch.distributions import Multinomial
-from typing import Tuple
-
-def hypergeom_logpmf(k,N,K,n):
-    return (
-        torch.lgamma(K+1) - torch.lgamma(k+1) - torch.lgamma(K-k+1)
-      + torch.lgamma(N-K+1) - torch.lgamma(n-k+1)
-      - torch.lgamma(N-K-n+k+1)
-      - (torch.lgamma(N+1) - torch.lgamma(n+1) - torch.lgamma(N-n+1))
-    )
-
-from torch.distributions import Multinomial, Binomial
-
-def constrained_multinomial_proposal(
-    x:     torch.LongTensor,    # (B,d)
-    x_exp: torch.Tensor,        # (B,d)
-    S:     torch.LongTensor,    # (d,) target *column*-sums
-    a:     torch.LongTensor,    # (B,d) current a = x0_hat_t
-    N_s:   torch.LongTensor,    # (B,d) latent total jumps at s
-):
-    """
-    Propose x' with column-sums S by distributing
-    R_j = S_j - sum_b x_{b,j} via a signed multinomial
-    across the B rows of each column j.
-    Then clip so we never leave the bridge support:
-      |x'_{b,j} - a_{b,j}| <= N_s_{b,j}.
-    """
-    B, d = x.shape
-    # 1) compute column residuals
-    col_sum = x.sum(dim=0)            # (d,)
-    R       = S - col_sum            # (d,)
-    sgn     = R.sign().long()         # (d,)
-    Rabs    = R.abs().long()          # (d,)
-
-    # 2) directional weights
-    diff    = (x_exp - x).float() * sgn.unsqueeze(0)   # (B,d)
-    weights = diff.clamp(min=0.0)                     # zero out opp. dir
-    wsum    = weights.sum(dim=0, keepdim=True)        # (1,d)
-    # avoid all-zero
-    weights[:, wsum[0]==0] += 1.0
-    wsum    = weights.sum(dim=0, keepdim=True)        # updated
-    probs   = weights / wsum                          # (B,d)
-
-    # 3) per-column Multinomial into B rows
-    delta = torch.zeros_like(x)
-    for j in range(d):
-        if Rabs[j] > 0:
-            m = Multinomial(total_count=Rabs[j].item(),
-                             probs=probs[:,j]).sample()  # (B,)
-            delta[:,j] = m.round().long()
-
-    # 4) raw proposal
-    x_prop = x + sgn.unsqueeze(0) * delta             # (B,d)
-
-    # 5) clip each entry to remain in support:
-    #    a_{b,j} - N_s_{b,j} <= x_prop_{b,j} <= a_{b,j} + N_s_{b,j}
-    lower = a - N_s
-    upper = a + N_s
-    x_prop = torch.max(torch.min(x_prop, upper), lower)
-
-    return x_prop, sgn
-
-@torch.no_grad()
-def mh_mean_constrained_update(
-    x:       torch.LongTensor,    # (B,d) must sum columns to S
-    x_exp:   torch.Tensor,        # (B,d) expected x
-    S:       torch.LongTensor,    # (d,) column-sum target
-    a:       torch.LongTensor,    # (B,d) x0_hat_t
-    N_t:     torch.LongTensor,    # (B,d) latents at t
-    B_t:     torch.LongTensor,    # (B,d) latents at t
-    N_s:     torch.LongTensor,    # (B,d) latents at s
-    sweeps:  int = 10
-) -> torch.LongTensor:
-    """
-    MH on the *column*-sum constrained reverse kernel.
-    """
-    B, d = x.shape
-    device = x.device
-
-    # 0) project once onto correct column-sum manifold
-    x, _ = constrained_multinomial_proposal(x, x_exp, S, a, N_s)
-
-    for _ in range(sweeps):
-        # 1) pick a column j and two distinct rows p,q
-        j = torch.randint(d, (1,), device=device).item()
-        p = torch.randint(B, (1,), device=device).item()
-        q = torch.randint(B, (1,), device=device).item()
-        if p == q:
-            continue
-
-        # 2) propose to move +1 at (p,j), -1 at (q,j)
-        x_prop = x.clone()
-        x_prop[p,j] += 1
-        x_prop[q,j] -= 1
-
-        # 3) quick support check
-        if not (0 <= x_prop[q,j]):
-            continue
-        for idx in (p,q):
-            if abs(x_prop[idx,j] - a[idx,j]) > N_s[idx,j]:
-                break
-        else:
-            # 4) compute per-coordinate hypergeom log-pmf ratios
-            #    only rows p and q in column j change
-            def HG_log(b, Nt, Bt, Ns):
-                return hypergeom_logpmf(
-                    k=b,
-                    N=Nt, K=Bt, n=Ns
-                )
-            # current births:
-            Bsc_p = (N_s[p,j] + (x[p,j]-a[p,j]))//2
-            Bsc_q = (N_s[q,j] + (x[q,j]-a[q,j]))//2
-            # proposed births:
-            Bsp_p = (N_s[p,j] + (x_prop[p,j]-a[p,j]))//2
-            Bsp_q = (N_s[q,j] + (x_prop[q,j]-a[q,j]))//2
-
-            logp_curr = ( 
-                HG_log(Bsc_p, N_t[p,j], B_t[p,j], N_s[p,j])
-              + HG_log(Bsc_q, N_t[q,j], B_t[q,j], N_s[q,j])
-            )
-            logp_prop = (
-                HG_log(Bsp_p, N_t[p,j], B_t[p,j], N_s[p,j])
-              + HG_log(Bsp_q, N_t[q,j], B_t[q,j], N_s[q,j])
-            )
-
-            alpha = (logp_prop - logp_curr).exp().clamp(max=1.0)
-            if torch.rand(1, device=device) < alpha:
-                x = x_prop
-    return x
-
+from .sampling.hypergeom import Hypergeometric
 
 
 class PoissonBDBridgeCollate:
@@ -291,12 +107,12 @@ class PoissonBDBridgeCollate:
         B_t = torch.empty_like(N)
         
         # Vectorized hypergeometric sampling
-        B_t_np = manual_hypergeometric(
-            total_count=N.cpu().numpy(),
-            num_successes=B1.cpu().numpy(),
-            num_draws=N_t.cpu().numpy()
+        B_t = manual_hypergeometric(
+            total_count=N, # .cpu().numpy(),
+            success_count=B1, # .cpu().numpy(),
+            num_draws=N_t # .cpu().numpy()
         )
-        B_t = torch.from_numpy(B_t_np).to(device)
+        # B_t = torch.from_numpy(B_t_np).to(device)
 
         x_t = x0 + (2 * B_t - N_t)          # (B, d)
 
@@ -402,11 +218,7 @@ class PoissonMeanConstrainedBDBridgeCollate:
         N_t    = torch.binomial(N.float(), w_t.unsqueeze(-1)).long()  # (B,d)
 
         # births up to t
-        B_t = torch.from_numpy(
-                  manual_hypergeometric(N.cpu().numpy(),
-                                        B1.cpu().numpy(),
-                                        N_t.cpu().numpy())
-              ).to(device)
+        B_t = manual_hypergeometric(N, B1, N_t)
 
         # raw x_t
         x_t_raw = x0 + 2 * B_t - N_t                   # (B,d)

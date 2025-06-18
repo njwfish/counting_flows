@@ -5,7 +5,7 @@ A unified framework for discrete flow matching on count data using
 Poisson and Negative Binomial bridges.
 """
 
-from .models import NBPosterior, BetaBinomialPosterior, MLERegressor, ZeroInflatedPoissonPosterior
+from .models import MMDPosterior
 from .datasets import PoissonDataset, BetaBinomialDataset, create_dataloader, InfiniteDataLoader
 from .samplers import bd_reverse_sampler, reflected_bd_reverse_sampler
 from .training import train_model, create_training_dataloader
@@ -15,10 +15,7 @@ __version__ = "0.1.0"
 __author__ = "Your Name"
 
 __all__ = [
-    "NBPosterior", 
-    "BetaBinomialPosterior", 
-    "MLERegressor", 
-    "ZeroInflatedPoissonPosterior",
+    "MMDPosterior", 
     "PoissonDataset",
     "BetaBinomialDataset",
     "PoissonBridgeCollate",

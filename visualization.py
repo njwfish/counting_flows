@@ -357,14 +357,10 @@ def plot_true_marginal_distributions(x0_batch, x1_batch, z_batch, bridge_collate
     n_dims_to_plot = min(4, d)
     
     # Collect samples for all time points
-    print(f"Sampling bridge marginals at {len(times)} time points...")
     all_x_t_samples = []  # List of [n_samples, d] tensors
     all_M_samples = []    # List of [n_samples, d] tensors
     
     for i, t_val in enumerate(times):
-        if i % 5 == 0:  # Progress indicator
-            print(f"  Progress: {i+1}/{len(times)} (t={t_val:.2f})")
-    
         # Create batch data for this time point
         batch_data = []
         for j in range(n_samples):
@@ -390,8 +386,6 @@ def plot_true_marginal_distributions(x0_batch, x1_batch, z_batch, bridge_collate
     # Convert to arrays for plotting: [time_steps, n_samples, d]
     x_t_array = np.array([step.numpy() for step in all_x_t_samples])  # [T, B, d]
     M_array = np.array([step.numpy() for step in all_M_samples])      # [T, B, d]
-    
-    print(f"Collected samples shape: x_t={x_t_array.shape}, M_t={M_array.shape}")
     
     # Top row: x_t evolution over time (exactly like x_t trajectories)
     for dim in range(n_dims_to_plot):

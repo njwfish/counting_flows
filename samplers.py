@@ -7,42 +7,8 @@ using trained neural networks and bridge kernels.
 
 import torch
 from torch.distributions import Binomial
-from .scheduling import make_time_spacing_schedule, make_lambda_schedule
+from .scheduling import make_lambda_schedule
 from .bridges import manual_hypergeometric, mh_mean_constrained_update
-
-def bd_step(
-    x_t:    torch.LongTensor,   # (B,d) current state at time t
-    x0_hat: torch.LongTensor,   # (B,d) model prediction of X₀
-    N_t:    torch.LongTensor,   # (B,d) latent total jumps at t
-    B_t:    torch.LongTensor,   # (B,d) latent births at t
-    w_t:    torch.Tensor,       # scalar or (B,)                = w(t)
-    w_s:    torch.Tensor        # scalar or (B,)                = w(s)
-) -> (torch.LongTensor, torch.LongTensor, torch.LongTensor):
-    """
-    One reverse step of the Birth–Death bridge (unreflected).
-    Returns (x_s, N_s, B_s).
-    """
-    # 1) thinning: N_s ~ Binomial(N_t, w_s/w_t)
-    p = (w_s / w_t).clamp(0.0, 1.0)
-    if p.ndim == 1:
-        p = p.unsqueeze(-1)         # (B,1)
-    p = p.expand_as(N_t).float()    # (B,d)
-    # use torch.distributions.Binomial for true Binomial
-    binom = Binomial(total_count=N_t.float(), probs=p)
-    N_s   = binom.sample().long()   # (B,d)
-
-    # 2) births: B_s ~ Hypergeom(N_t, B_t, N_s)
-    #    (replace with your fast vectorized version)
-    B_s_np = manual_hypergeometric(
-      total_count=N_t.cpu().numpy(),
-      num_successes=B_t.cpu().numpy(),
-      num_draws=N_s.cpu().numpy()
-    )
-    B_s = torch.from_numpy(B_s_np).to(N_t.device).long()
-
-    # 3) reconstruct
-    x_s = x0_hat + 2*B_s - N_s
-    return x_s, N_s, B_s
 
 
 @torch.no_grad()
@@ -107,12 +73,12 @@ def bd_reverse_sampler(
         N_s = Binomial(N_t.float(), ρ).sample().long()
 
         # d) births surviving the thinning  ~ Hypergeom
-        B_s_np = manual_hypergeometric(
-            total_count   = N_t.cpu().numpy(),
-            num_successes = B_t.cpu().numpy(),
-            num_draws     = N_s.cpu().numpy()
+        B_s = manual_hypergeometric(
+            total_count   = N_t,
+            success_count = B_t,
+            num_draws     = N_s
         )
-        B_s = torch.from_numpy(B_s_np).to(device).long()
+        # B_s = torch.from_numpy(B_s_np).to(device).long()
 
         # e) reconstruct state at s and *derive* slack pairs
         x_s = x0_hat_t + 2*B_s - N_s
@@ -210,12 +176,12 @@ def bd_reverse_with_interpolated_mean(
         N_s = Binomial(N_t.float(), ρ).sample().long()
 
         # 3) births that survive the thinning  ~ Hypergeom
-        B_s_np = manual_hypergeometric(
-            total_count   = N_t.cpu().numpy(),
-            num_successes = B_t.cpu().numpy(),
-            num_draws     = N_s.cpu().numpy()
+        B_s = manual_hypergeometric(
+            total_count   = N_t, #.cpu().numpy(),
+            success_count = B_t, #.cpu().numpy(),
+            num_draws     = N_s #.cpu().numpy()
         )
-        B_s = torch.from_numpy(B_s_np).to(device).long()
+        # B_s = torch.from_numpy(B_s_np).to(device).long()
 
         # 4) raw state at s
         x_raw_s = x0_hat_t + 2*B_s - N_s
@@ -253,19 +219,11 @@ def bd_reverse_with_interpolated_mean(
         if return_M:          M_traj.append(M_s.cpu())
 
     # ── output ──────────────────────────────────────────────────────
-    if return_trajectory and return_x_hat and return_M:
-        return x_t, traj, xhat_traj, M_traj
-    if return_trajectory and return_x_hat:
-        return x_t, traj, xhat_traj
-    if return_trajectory and return_M:
-        return x_t, traj, M_traj
-    if return_x_hat and return_M:
-        return x_t, xhat_traj, M_traj
-    if return_trajectory:
-        return x_t, traj
-    if return_x_hat and return_M:
-        return x_t, xhat_traj, M_traj
-    return x_t
+    outs = [x_t]
+    if return_trajectory: outs.append(traj)
+    if return_x_hat:      outs.append(xhat_traj)
+    if return_M:          outs.append(M_traj)
+    return tuple(outs) if len(outs) > 1 else x_t
 
 
 def reflected_bd_reverse_sampler(

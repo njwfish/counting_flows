@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 
 from .cli import parse_args
-from .models import NBPosterior, BetaBinomialPosterior, MLERegressor, ZeroInflatedPoissonPosterior, IQNPosterior, MMDPosterior
+from .models import MMDPosterior
 from .training import train_model, create_training_dataloader
 from .samplers import bd_reverse_sampler, reflected_bd_reverse_sampler, bd_reverse_with_interpolated_mean
 from .visualization import (

@@ -74,10 +74,6 @@ def train_model(
         loss.backward()
         optimizer.step()
 
-
-        if step % 100 == 0:
-            print(f"t: {t.min()}, {t.max()}, M_t: {M_t.min()}, {M_t.max()}, x_0: {torch.quantile(x0.float(), 0.25)}, {torch.quantile(x0.float(), 0.75)}, x0_preds: {torch.quantile(x0_preds.float(), 0.25)}, {torch.quantile(x0_preds.float(), 0.75)}")
-        
         current_loss = loss.item()
         losses.append(current_loss)
         interval_losses.append(current_loss)
