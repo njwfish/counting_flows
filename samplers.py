@@ -8,7 +8,8 @@ using trained neural networks and bridge kernels.
 import torch
 from torch.distributions import Binomial
 from .scheduling import make_lambda_schedule
-from .bridges import manual_hypergeometric, mh_mean_constrained_update
+from .sampling.hypergeom import manual_hypergeometric
+from .sampling.mean_constrained import mh_mean_constrained_update
 
 
 @torch.no_grad()

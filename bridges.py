@@ -2,7 +2,8 @@ import torch
 
 import numpy as np
 from .scheduling import make_time_spacing_schedule, make_lambda_schedule
-from .sampling.hypergeom import Hypergeometric
+from .sampling.hypergeom import manual_hypergeometric
+from .sampling.mean_constrained import mh_mean_constrained_update
 
 
 class PoissonBDBridgeCollate:

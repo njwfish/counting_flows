@@ -104,7 +104,6 @@ def constrained_multinomial_proposal(
 ):
     """
     Scatter-add version inspired by torch.distributions.Multinomial.
-    Should be more memory efficient than one_hot approach.
     """
     B, d = x.shape
     device = x.device

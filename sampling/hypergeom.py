@@ -26,91 +26,214 @@ def maybe_compile(func):
     return func
 
 @torch.no_grad()
-def manual_hypergeometric(total_count, success_count, num_draws):
+def manual_hypergeometric(total_count, success_count, num_draws, backend='auto'):
     """
-    Pure PyTorch vectorized hypergeometric sampling function.
+    Pure PyTorch vectorized hypergeometric sampling function with smart backend selection.
     
     Drop-in replacement for manual_hypergeometric that:
     1. Accepts torch tensors, numpy arrays, or scalars
-    2. Returns torch tensors on the same device as inputs
-    3. Uses our fast PyTorch implementation with both simple and HRUA methods
-    4. Handles edge cases robustly
+    2. Returns same type/device as inputs 
+    3. Uses numpy sampler for numpy inputs, torch sampler for torch inputs by default
+    4. Allows override to force specific backend
+    5. Handles conversions efficiently to minimize overhead
     
     Args:
         total_count: Total population size (tensor, array, or scalar)
         success_count: Number of success items in population (tensor, array, or scalar)
         num_draws: Number of items drawn (tensor, array, or scalar)
+        backend: 'auto' (default), 'numpy', or 'torch' to control which sampler to use
         
     Returns:
-        torch.Tensor: Number of successes in drawn samples (same shape as broadcasted inputs)
+        Same type as inputs: Number of successes in drawn samples (same shape as broadcasted inputs)
     """
-    # Convert inputs to tensors
-    if isinstance(total_count, np.ndarray):
-        total_count = torch.from_numpy(total_count)
-    elif not isinstance(total_count, torch.Tensor):
-        total_count = torch.tensor(total_count)
+    
+    # Determine input types and original format info
+    input_types = []
+    devices = []
+    original_inputs = [total_count, success_count, num_draws]
+    
+    for inp in original_inputs:
+        if isinstance(inp, torch.Tensor):
+            input_types.append('torch')
+            devices.append(inp.device)
+        elif isinstance(inp, np.ndarray):
+            input_types.append('numpy')
+            devices.append(None)
+        else:
+            input_types.append('scalar')
+            devices.append(None)
+    
+    # Determine the primary input type and device
+    if 'torch' in input_types:
+        primary_type = 'torch'
+        # Find a GPU device if any input is on GPU, otherwise use first torch device
+        primary_device = None
+        for device in devices:
+            if device is not None:
+                if primary_device is None or device.type == 'cuda':
+                    primary_device = device
+        if primary_device is None:
+            primary_device = torch.device('cpu')
+    elif 'numpy' in input_types:
+        primary_type = 'numpy' 
+        primary_device = None
+    else:
+        primary_type = 'scalar'
+        primary_device = None
+    
+    # Decide which backend to use
+    if backend == 'auto':
+        use_backend = primary_type if primary_type in ['numpy', 'torch'] else 'torch'
+    elif backend in ['numpy', 'torch']:
+        use_backend = backend
+    else:
+        raise ValueError(f"backend must be 'auto', 'numpy', or 'torch', got {backend}")
+    
+    # Convert inputs to appropriate format for chosen backend
+    if use_backend == 'numpy':
+        # Convert everything to numpy
+        def to_numpy(x):
+            if isinstance(x, torch.Tensor):
+                return x.cpu().numpy()
+            elif isinstance(x, np.ndarray):
+                return x
+            else:
+                return np.array(x)
         
-    if isinstance(success_count, np.ndarray):
-        success_count = torch.from_numpy(success_count)
-    elif not isinstance(success_count, torch.Tensor):
-        success_count = torch.tensor(success_count)
+        total_count_np = to_numpy(total_count)
+        success_count_np = to_numpy(success_count)
+        num_draws_np = to_numpy(num_draws)
         
-    if isinstance(num_draws, np.ndarray):
-        num_draws = torch.from_numpy(num_draws)
-    elif not isinstance(num_draws, torch.Tensor):
-        num_draws = torch.tensor(num_draws)
-    
-    # Ensure integer types
-    total_count = total_count.long()
-    success_count = success_count.long()
-    num_draws = num_draws.long()
-    
-    # Get the device (prioritize GPU if any input is on GPU)
-    device = total_count.device
-    for tensor in [success_count, num_draws]:
-        if tensor.device.type == 'cuda':
-            device = tensor.device
-            break
-    
-    # Move all to the same device
-    total_count = total_count.to(device)
-    success_count = success_count.to(device)
-    num_draws = num_draws.to(device)
-    
-    # Handle edge cases with clipping (like original manual_hypergeometric)
-    success_count = torch.clamp(success_count, min=0)
-    success_count = torch.min(success_count, total_count)
-    num_draws = torch.clamp(num_draws, min=0)
-    num_draws = torch.min(num_draws, total_count)
-    
-    # Handle zero cases
-    zero_draws = (num_draws == 0)
-    zero_success = (success_count == 0)
-    all_draws = (num_draws >= total_count)
-    all_success = (success_count >= total_count)
-    
-    # Initialize result
-    result = torch.zeros_like(total_count)
-    
-    # Handle edge cases first
-    result[zero_draws] = 0
-    result[zero_success] = 0
-    result[all_draws] = success_count[all_draws]  
-    result[all_success] = num_draws[all_success]
-    
-    # Find cases that need actual sampling
-    need_sampling = ~(zero_draws | zero_success | all_draws | all_success)
-    
-    if need_sampling.any():
-        # Sample using our Hypergeometric distribution
+        # Ensure integer types and handle broadcasting
+        total_count_np = np.asarray(total_count_np, dtype=np.int64)
+        success_count_np = np.asarray(success_count_np, dtype=np.int64) 
+        num_draws_np = np.asarray(num_draws_np, dtype=np.int64)
         
-        dist = Hypergeometric(
-            total_count=total_count[need_sampling],
-            success_count=success_count[need_sampling], 
-            num_draws=num_draws[need_sampling],
-            validate_args=False  # We already handled edge cases
-        )
-        result[need_sampling] = dist.sample()
+        # Broadcast to common shape
+        total_count_np, success_count_np, num_draws_np = np.broadcast_arrays(
+            total_count_np, success_count_np, num_draws_np)
+        
+        # Handle edge cases with clipping
+        success_count_np = np.clip(success_count_np, 0, None)
+        success_count_np = np.minimum(success_count_np, total_count_np)
+        num_draws_np = np.clip(num_draws_np, 0, None)
+        num_draws_np = np.minimum(num_draws_np, total_count_np)
+        
+        # Handle edge cases manually for consistency with torch version
+        zero_draws = (num_draws_np == 0)
+        zero_success = (success_count_np == 0)
+        all_draws = (num_draws_np >= total_count_np)
+        all_success = (success_count_np >= total_count_np)
+        
+        # Initialize result
+        result_np = np.zeros_like(total_count_np)
+        
+        # Handle edge cases
+        result_np[zero_draws] = 0
+        result_np[zero_success] = 0
+        result_np[all_draws] = success_count_np[all_draws]
+        result_np[all_success] = num_draws_np[all_success]
+        
+        # Find cases that need actual sampling
+        need_sampling = ~(zero_draws | zero_success | all_draws | all_success)
+        
+        if need_sampling.any():
+            # Use numpy hypergeometric sampler for cases that need sampling
+            result_np[need_sampling] = np.random.hypergeometric(
+                success_count_np[need_sampling], 
+                total_count_np[need_sampling] - success_count_np[need_sampling], 
+                num_draws_np[need_sampling]
+            )
+        
+        # Convert result back to original format
+        if primary_type == 'torch':
+            result = torch.from_numpy(result_np).to(primary_device)
+        elif primary_type == 'numpy':
+            result = result_np
+        else:  # scalar
+            if result_np.ndim == 0:
+                result = result_np.item()
+            else:
+                result = result_np
+            
+    else:  # use_backend == 'torch'
+        # Convert everything to torch (this is the original logic)
+        if isinstance(total_count, np.ndarray):
+            total_count = torch.from_numpy(total_count)
+        elif not isinstance(total_count, torch.Tensor):
+            total_count = torch.tensor(total_count)
+            
+        if isinstance(success_count, np.ndarray):
+            success_count = torch.from_numpy(success_count)
+        elif not isinstance(success_count, torch.Tensor):
+            success_count = torch.tensor(success_count)
+            
+        if isinstance(num_draws, np.ndarray):
+            num_draws = torch.from_numpy(num_draws)
+        elif not isinstance(num_draws, torch.Tensor):
+            num_draws = torch.tensor(num_draws)
+        
+        # Ensure integer types
+        total_count = total_count.long()
+        success_count = success_count.long()
+        num_draws = num_draws.long()
+        
+        # Get the device (prioritize GPU if any input is on GPU)
+        device = total_count.device
+        for tensor in [success_count, num_draws]:
+            if tensor.device.type == 'cuda':
+                device = tensor.device
+                break
+        
+        # Move all to the same device
+        total_count = total_count.to(device)
+        success_count = success_count.to(device)
+        num_draws = num_draws.to(device)
+        
+        # Handle edge cases with clipping (like original manual_hypergeometric)
+        success_count = torch.clamp(success_count, min=0)
+        success_count = torch.min(success_count, total_count)
+        num_draws = torch.clamp(num_draws, min=0)
+        num_draws = torch.min(num_draws, total_count)
+        
+        # Handle zero cases
+        zero_draws = (num_draws == 0)
+        zero_success = (success_count == 0)
+        all_draws = (num_draws >= total_count)
+        all_success = (success_count >= total_count)
+        
+        # Initialize result
+        result_torch = torch.zeros_like(total_count)
+        
+        # Handle edge cases first
+        result_torch[zero_draws] = 0
+        result_torch[zero_success] = 0
+        result_torch[all_draws] = success_count[all_draws]  
+        result_torch[all_success] = num_draws[all_success]
+        
+        # Find cases that need actual sampling
+        need_sampling = ~(zero_draws | zero_success | all_draws | all_success)
+        
+        if need_sampling.any():
+            # Sample using our Hypergeometric distribution
+            dist = Hypergeometric(
+                total_count=total_count[need_sampling],
+                success_count=success_count[need_sampling], 
+                num_draws=num_draws[need_sampling],
+                validate_args=False  # We already handled edge cases
+            )
+            result_torch[need_sampling] = dist.sample()
+        
+        # Convert result back to original format if needed
+        if primary_type == 'numpy':
+            result = result_torch.cpu().numpy()
+        elif primary_type == 'torch':
+            result = result_torch
+        else:  # scalar
+            if result_torch.numel() == 1:
+                result = result_torch.item()
+            else:
+                result = result_torch.cpu().numpy()
     
     return result
 
