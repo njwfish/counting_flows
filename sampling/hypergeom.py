@@ -25,8 +25,90 @@ def maybe_compile(func):
             pass
     return func
 
+def hypergeometric_torch(total_count, success_count, num_draws):
+    """
+    Internal torch-based hypergeometric sampling function.
+    Assumes all inputs are already torch tensors on the same device.
+    """
+    # Handle edge cases with clipping
+    success_count = torch.clamp(success_count, min=0)
+    success_count = torch.min(success_count, total_count)
+    num_draws = torch.clamp(num_draws, min=0)
+    num_draws = torch.min(num_draws, total_count)
+    
+    # Handle zero cases
+    zero_draws = (num_draws == 0)
+    zero_success = (success_count == 0)
+    all_draws = (num_draws >= total_count)
+    all_success = (success_count >= total_count)
+    
+    # Initialize result
+    result = torch.zeros_like(total_count)
+    
+    # Handle edge cases first
+    result[zero_draws] = 0
+    result[zero_success] = 0
+    result[all_draws] = success_count[all_draws]  
+    result[all_success] = num_draws[all_success]
+    
+    # Find cases that need actual sampling
+    need_sampling = ~(zero_draws | zero_success | all_draws | all_success)
+    
+    if need_sampling.any():
+        # Sample using our Hypergeometric distribution
+        dist = Hypergeometric(
+            total_count=total_count[need_sampling],
+            success_count=success_count[need_sampling], 
+            num_draws=num_draws[need_sampling],
+            validate_args=False  # We already handled edge cases
+        )
+        result[need_sampling] = dist.sample()
+    
+    return result
+
+
+def hypergeometric_numpy(total_count, success_count, num_draws):
+    """
+    Internal numpy-based hypergeometric sampling function.
+    Assumes all inputs are already numpy arrays with compatible shapes.
+    """
+    # Handle edge cases with clipping
+    success_count = np.clip(success_count, 0, None)
+    success_count = np.minimum(success_count, total_count)
+    num_draws = np.clip(num_draws, 0, None)
+    num_draws = np.minimum(num_draws, total_count)
+    
+    # Handle edge cases manually for consistency with torch version
+    zero_draws = (num_draws == 0)
+    zero_success = (success_count == 0)
+    all_draws = (num_draws >= total_count)
+    all_success = (success_count >= total_count)
+    
+    # Initialize result
+    result = np.zeros_like(total_count)
+    
+    # Handle edge cases
+    result[zero_draws] = 0
+    result[zero_success] = 0
+    result[all_draws] = success_count[all_draws]
+    result[all_success] = num_draws[all_success]
+    
+    # Find cases that need actual sampling
+    need_sampling = ~(zero_draws | zero_success | all_draws | all_success)
+    
+    if need_sampling.any():
+        # Use numpy hypergeometric sampler for cases that need sampling
+        result[need_sampling] = np.random.hypergeometric(
+            success_count[need_sampling], 
+            total_count[need_sampling] - success_count[need_sampling], 
+            num_draws[need_sampling]
+        )
+    
+    return result
+
+
 @torch.no_grad()
-def manual_hypergeometric(total_count, success_count, num_draws, backend='auto'):
+def hypergeometric(total_count, success_count, num_draws, backend='auto'):
     """
     Pure PyTorch vectorized hypergeometric sampling function with smart backend selection.
     
@@ -89,7 +171,7 @@ def manual_hypergeometric(total_count, success_count, num_draws, backend='auto')
     else:
         raise ValueError(f"backend must be 'auto', 'numpy', or 'torch', got {backend}")
     
-    # Convert inputs to appropriate format for chosen backend
+    # Convert inputs and dispatch to appropriate backend
     if use_backend == 'numpy':
         # Convert everything to numpy
         def to_numpy(x):
@@ -113,37 +195,8 @@ def manual_hypergeometric(total_count, success_count, num_draws, backend='auto')
         total_count_np, success_count_np, num_draws_np = np.broadcast_arrays(
             total_count_np, success_count_np, num_draws_np)
         
-        # Handle edge cases with clipping
-        success_count_np = np.clip(success_count_np, 0, None)
-        success_count_np = np.minimum(success_count_np, total_count_np)
-        num_draws_np = np.clip(num_draws_np, 0, None)
-        num_draws_np = np.minimum(num_draws_np, total_count_np)
-        
-        # Handle edge cases manually for consistency with torch version
-        zero_draws = (num_draws_np == 0)
-        zero_success = (success_count_np == 0)
-        all_draws = (num_draws_np >= total_count_np)
-        all_success = (success_count_np >= total_count_np)
-        
-        # Initialize result
-        result_np = np.zeros_like(total_count_np)
-        
-        # Handle edge cases
-        result_np[zero_draws] = 0
-        result_np[zero_success] = 0
-        result_np[all_draws] = success_count_np[all_draws]
-        result_np[all_success] = num_draws_np[all_success]
-        
-        # Find cases that need actual sampling
-        need_sampling = ~(zero_draws | zero_success | all_draws | all_success)
-        
-        if need_sampling.any():
-            # Use numpy hypergeometric sampler for cases that need sampling
-            result_np[need_sampling] = np.random.hypergeometric(
-                success_count_np[need_sampling], 
-                total_count_np[need_sampling] - success_count_np[need_sampling], 
-                num_draws_np[need_sampling]
-            )
+        # Call numpy backend
+        result_np = hypergeometric_numpy(total_count_np, success_count_np, num_draws_np)
         
         # Convert result back to original format
         if primary_type == 'torch':
@@ -157,7 +210,7 @@ def manual_hypergeometric(total_count, success_count, num_draws, backend='auto')
                 result = result_np
             
     else:  # use_backend == 'torch'
-        # Convert everything to torch (this is the original logic)
+        # Convert everything to torch
         if isinstance(total_count, np.ndarray):
             total_count = torch.from_numpy(total_count)
         elif not isinstance(total_count, torch.Tensor):
@@ -190,39 +243,8 @@ def manual_hypergeometric(total_count, success_count, num_draws, backend='auto')
         success_count = success_count.to(device)
         num_draws = num_draws.to(device)
         
-        # Handle edge cases with clipping (like original manual_hypergeometric)
-        success_count = torch.clamp(success_count, min=0)
-        success_count = torch.min(success_count, total_count)
-        num_draws = torch.clamp(num_draws, min=0)
-        num_draws = torch.min(num_draws, total_count)
-        
-        # Handle zero cases
-        zero_draws = (num_draws == 0)
-        zero_success = (success_count == 0)
-        all_draws = (num_draws >= total_count)
-        all_success = (success_count >= total_count)
-        
-        # Initialize result
-        result_torch = torch.zeros_like(total_count)
-        
-        # Handle edge cases first
-        result_torch[zero_draws] = 0
-        result_torch[zero_success] = 0
-        result_torch[all_draws] = success_count[all_draws]  
-        result_torch[all_success] = num_draws[all_success]
-        
-        # Find cases that need actual sampling
-        need_sampling = ~(zero_draws | zero_success | all_draws | all_success)
-        
-        if need_sampling.any():
-            # Sample using our Hypergeometric distribution
-            dist = Hypergeometric(
-                total_count=total_count[need_sampling],
-                success_count=success_count[need_sampling], 
-                num_draws=num_draws[need_sampling],
-                validate_args=False  # We already handled edge cases
-            )
-            result_torch[need_sampling] = dist.sample()
+        # Call torch backend
+        result_torch = hypergeometric_torch(total_count, success_count, num_draws)
         
         # Convert result back to original format if needed
         if primary_type == 'numpy':

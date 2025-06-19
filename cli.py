@@ -41,15 +41,15 @@ def parse_args():
     # Bridge mode
     parser.add_argument(
         "--bridge", "--bridge-mode",
-        choices=["nb", "poisson", "poisson_bd", "polya_bd", "reflected_bd", "poisson_bd_mean"],
-        default="nb", 
-        help="Bridge type: 'nb' (Polya/Beta-Binomial), 'poisson' (exact Poisson), 'poisson_bd' (Poisson Birth-Death), 'polya_bd' (Polya Birth-Death), or 'reflected_bd' (Reflected Birth-Death)"
+        choices=["poisson_bd", "reflected_bd", "poisson_bd_mean"],
+        default="poisson_bd", 
+        help="Bridge type: 'poisson_bd' (Poisson Birth-Death), 'reflected_bd' (Reflected Birth-Death), or 'poisson_bd_mean' (Mean-Constrained Poisson Birth-Death)"
     )
     
     # Sampling bridge mode (can be different from training)
     parser.add_argument(
         "--sample-bridge", 
-        choices=["nb", "poisson", "poisson_bd", "polya_bd", "reflected_bd", "auto"],
+        choices=["poisson_bd", "reflected_bd", "poisson_bd_mean", "auto"],
         default="auto",
         help="Bridge type for sampling (auto=same as training bridge)"
     )
@@ -121,6 +121,9 @@ def parse_args():
     # Reflected BD bridge parameters (equal birth/death rates)
     parser.add_argument("--lam0", type=float, default=8.0, help="Birth/Death rate λ at t=0 for reflected BD bridge")
     parser.add_argument("--lam1", type=float, default=8.0, help="Birth/Death rate λ at t=1 for reflected BD bridge")
+    
+    # Mean-constrained bridge parameters
+    parser.add_argument("--mh-sweeps", type=int, default=10, help="Number of MH sweeps for mean-constrained bridge")
     
     # Generation parameters
     parser.add_argument("--gen-samples", type=int, default=1000, help="Number of samples to generate")

@@ -9,7 +9,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy import stats
 from .scheduling import make_time_spacing_schedule
-from .samplers import bd_reverse_sampler, reflected_bd_reverse_sampler
 
 
 def plot_schedule_comparison(K=50, title="Schedule Comparison"):

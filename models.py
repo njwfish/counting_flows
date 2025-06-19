@@ -13,7 +13,7 @@ Provides different neural architectures for predicting count distributions:
 import torch
 import torch.nn as nn
 
-class MMDPosterior(nn.Module):
+class EnergyScorePosterior(nn.Module):
     """
     Distributional-diffusion energy score (eq.14) with m-sample approximation.
     f_θ(x_t, t, z, ε) → x₀̂ = x_t + Δx
@@ -70,11 +70,11 @@ class MMDPosterior(nn.Module):
         → returns [B, x_dim]
         """
         B = x_t.shape[0]
-        # 1) sample noise if needed
+        # sample noise if needed
         if noise is None:
             noise = torch.randn(B, self.noise_dim, device=x_t.device)
 
-        # 2) unify t to shape [B,1]
+        # unify t to shape [B,1]
         if t.dim() == 1:
             t_col = t.unsqueeze(-1)
         elif t.dim() == 2 and t.shape[1] == 1:
@@ -82,15 +82,15 @@ class MMDPosterior(nn.Module):
         else:
             raise ValueError(f"t must be [B] or [B,1], got {tuple(t.shape)}")
 
-        # 3) concat everything
+        # concat everything
         inp = torch.cat([x_t.float(), t_col.float(), z.float(), M_t.float(), noise], dim=-1)
 
-        # 4) sanity check
+        # sanity check
         assert inp.shape[1] == self._in_dim, (
             f"got inp dim={inp.shape[1]}, expected {self._in_dim}"
         )
 
-        # 5) predict Δx, add to x_t
+        # predict Δx, add to x_t
         return self.net(inp) + x_t
 
     def sample(self, x_t, M_t, z, t, use_mean=False):
@@ -115,11 +115,11 @@ class MMDPosterior(nn.Module):
         """
         n, m, λ = x0_true.size(0), self.m, self.lambda_energy
 
-        # — replicate each input m times —
+        # replicate each input m times 
         x_t_rep = x_t.unsqueeze(1).expand(-1, m, -1).reshape(n * m, -1)
         z_rep   =   z.unsqueeze(1).expand(-1, m, -1).reshape(n * m, -1)
         M_t_rep = M_t.unsqueeze(1).expand(-1, m, -1).reshape(n * m, -1)
-        # flatten t to 1D so forward() will turn it into [n*m,1]
+        # flatten t to 1D so forward() will turn it into [n*m,1] (for t)
         if t.dim() == 2 and t.shape[1] == 1:
             t_rep = t.expand(-1, m).reshape(n * m)
         elif t.dim() == 1:
@@ -127,18 +127,18 @@ class MMDPosterior(nn.Module):
         else:
             raise ValueError(f"t must be [n] or [n,1], got {tuple(t.shape)}")
 
-        # sample m·n noises
+        # sample m·n noises (for noise)
         noise = torch.randn(n * m, self.noise_dim, device=x_t.device)
 
-        # get all x̂ preds: [n*m, x_dim] → view [n, m, x_dim]
+        # get all x̂ preds: [n*m, x_dim] → view [n, m, x_dim] (for x0_preds)
         x0_preds = self.forward(x_t_rep, M_t_rep, z_rep, t_rep, noise)
         x0_preds = x0_preds.view(n, m, -1)  # [n, m, d]
 
-        # 1) confinement
+        # confinement
         x0_true_rep = x0_true.unsqueeze(1).expand(-1, m, -1)
         term_conf   = (x0_preds - x0_true_rep).norm(dim=2).mean(dim=1)  # [n]
 
-        # 2) interaction (properly scaled!)
+        # interaction 
         pdists    = torch.stack([torch.pdist(x0_preds[i], p=2) for i in range(n)], dim=0)
         mean_pd   = pdists.mean(dim=1)                                # [n]
         term_int  = (λ / 2.0) * mean_pd                               # [n]

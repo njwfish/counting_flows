@@ -11,15 +11,16 @@ import os
 from pathlib import Path
 
 from .cli import parse_args
-from .models import MMDPosterior
+from .models import EnergyScorePosterior
 from .training import train_model, create_training_dataloader
-from .samplers import bd_reverse_sampler, reflected_bd_reverse_sampler, bd_reverse_with_interpolated_mean
+from .bridges.skellam import SkellamBridge
+from .bridges.reflected import ReflectedPoissonBDBridge
+from .bridges.constrained import SkellamMeanConstrainedBridge
 from .visualization import (
     plot_time_spacing_comparison,
     plot_generation_analysis, plot_loss_curve,
     plot_full_reverse_trajectories, plot_true_marginal_distributions
 )
-from .bridges import PoissonMeanConstrainedBDBridgeCollate, PoissonBDBridgeCollate, ReflectedPoissonBDBridgeCollate
 
 
 def load_model_checkpoint(model, checkpoint_path, device):
@@ -146,7 +147,7 @@ def main():
         model = IQNPosterior(x_dim=args.data_dim, context_dim=context_dim, hidden=args.hidden)
         print("Model: Implicit Quantile Networks")
     elif args.arch == "mmd":
-        model = MMDPosterior(x_dim=args.data_dim, context_dim=context_dim, hidden=args.hidden)
+        model = EnergyScorePosterior(x_dim=args.data_dim, context_dim=context_dim, hidden=args.hidden)
         print("Model: Maximum Mean Discrepancy")
     else:
         model = MLERegressor(x_dim=args.data_dim, context_dim=context_dim, hidden=args.hidden)
@@ -158,39 +159,8 @@ def main():
     base_mode = "fixed base" if args.fixed_base else "random base"
     print(f"Dataset: {args.dataset.title()} ({args.data_dim}D, {base_mode})")
     
-    if args.bridge == "nb":
-        train_dataloader, train_dataset = create_training_dataloader(
-            bridge_type="nb",
-            dataset_type=args.dataset,
-            batch_size=args.batch_size,
-            d=args.data_dim,
-            n_steps=args.steps,
-            dataset_size=dataset_size,
-            fixed_base=args.fixed_base,
-            r_min=args.r_min,
-            r_max=args.r_max,
-            r_schedule=args.r_schedule,
-            time_schedule=args.time_schedule,
-            **schedule_kwargs
-        )
-        print(f"Bridge: Negative Binomial (Polya) for training")
-        print(f"  R schedule: {args.r_schedule}")
-        print(f"  Time schedule: {args.time_schedule}")
-    elif args.bridge == "poisson":
-        train_dataloader, train_dataset = create_training_dataloader(
-            bridge_type="poisson",
-            dataset_type=args.dataset,
-            batch_size=args.batch_size,
-            d=args.data_dim,
-            n_steps=args.steps,
-            dataset_size=dataset_size,
-            fixed_base=args.fixed_base,
-            time_schedule=args.time_schedule,
-            **schedule_kwargs
-        )
-        print(f"Bridge: Poisson for training")
-        print(f"  Time schedule: {args.time_schedule}")
-    elif args.bridge == "poisson_bd":
+    # Symmetric bridge creation - all bridges get the same base parameters
+    if args.bridge == "poisson_bd":
         train_dataloader, train_dataset = create_training_dataloader(
             bridge_type="poisson_bd",
             dataset_type=args.dataset,
@@ -200,41 +170,13 @@ def main():
             dataset_size=dataset_size,
             fixed_base=args.fixed_base,
             time_schedule=args.time_schedule,
-            lam_p0=args.lam_p0,
-            lam_p1=args.lam_p1,
-            lam_m0=args.lam_m0,
-            lam_m1=args.lam_m1,
+            lam0=args.lam0,
+            lam1=args.lam1,
             schedule_type=args.bd_schedule,
             **schedule_kwargs
         )
         print(f"Bridge: Poisson Birth-Death for training")
-        print(f"  Birth rates: λ+({args.lam_p0:.1f} → {args.lam_p1:.1f})")
-        print(f"  Death rates: λ-({args.lam_m0:.1f} → {args.lam_m1:.1f})")
-        print(f"  Lambda schedule: {args.bd_schedule}")
-        print(f"  Time schedule: {args.time_schedule}")
-    elif args.bridge == "polya_bd":
-        train_dataloader, train_dataset = create_training_dataloader(
-            bridge_type="polya_bd",
-            dataset_type=args.dataset,
-            batch_size=args.batch_size,
-            d=args.data_dim,
-            n_steps=args.steps,
-            dataset_size=dataset_size,
-            fixed_base=args.fixed_base,
-            time_schedule=args.time_schedule,
-            r=args.bd_r,
-            beta=args.bd_beta,
-            lam_p0=args.lam_p0,
-            lam_p1=args.lam_p1,
-            lam_m0=args.lam_m0,
-            lam_m1=args.lam_m1,
-            schedule_type=args.bd_schedule,
-            **schedule_kwargs
-        )
-        print(f"Bridge: Polya Birth-Death for training")
-        print(f"  NB parameters: r={args.bd_r:.1f}, β={args.bd_beta:.1f}")
-        print(f"  Birth rates: λ+({args.lam_p0:.1f} → {args.lam_p1:.1f})")
-        print(f"  Death rates: λ-({args.lam_m0:.1f} → {args.lam_m1:.1f})")
+        print(f"  Lambda: {args.lam0:.1f} → {args.lam1:.1f}")
         print(f"  Lambda schedule: {args.bd_schedule}")
         print(f"  Time schedule: {args.time_schedule}")
     elif args.bridge == "reflected_bd":
@@ -249,10 +191,12 @@ def main():
             time_schedule=args.time_schedule,
             lam0=args.lam0,
             lam1=args.lam1,
+            schedule_type=args.bd_schedule,
             **schedule_kwargs
         )
         print(f"Bridge: Reflected Birth-Death for training")
-        print(f"  Equal rates: λ({args.lam0:.1f} → {args.lam1:.1f})")
+        print(f"  Lambda: {args.lam0:.1f} → {args.lam1:.1f}")
+        print(f"  Lambda schedule: {args.bd_schedule}")
         print(f"  Time schedule: {args.time_schedule}")
     elif args.bridge == "poisson_bd_mean":
         train_dataloader, train_dataset = create_training_dataloader(
@@ -264,21 +208,18 @@ def main():
             dataset_size=dataset_size,
             fixed_base=args.fixed_base,
             time_schedule=args.time_schedule,
-            lam_p0=args.lam_p0,
-            lam_p1=args.lam_p1,
-            lam_m0=args.lam_m0,
-            lam_m1=args.lam_m1,
+            lam0=args.lam0,
+            lam1=args.lam1,
             schedule_type=args.bd_schedule,
-            mh_sweeps=getattr(args, "mh_sweeps", 10),
+            mh_sweeps=args.mh_sweeps,
             **schedule_kwargs
         )
         print(f"Bridge: Mean-Constrained Poisson Birth-Death for training")
-        print(f"  Birth rates: λ+({args.lam_p0:.1f} → {args.lam_p1:.1f})")
-        print(f"  Death rates: λ-({args.lam_m0:.1f} → {args.lam_m1:.1f})")
+        print(f"  Lambda: {args.lam0:.1f} → {args.lam1:.1f}")
         print(f"  Lambda schedule: {args.bd_schedule}")
         print(f"  Time schedule: {args.time_schedule}")
     else:
-        raise ValueError(f"Unknown bridge type: {args.bridge}")
+        raise ValueError(f"Unknown bridge type: {args.bridge}. Supported types: poisson_bd, reflected_bd, poisson_bd_mean")
     
     # Setup checkpoints and model loading
     checkpoint_dir = "checkpoints"
@@ -348,39 +289,51 @@ def main():
         # Use reverse sampler to generate x0 from x1 using the bridge
         print(f"Using reverse sampler to generate x0 from x1...")
         
-        reverse_sampler = (
-            bd_reverse_with_interpolated_mean if sample_bridge_mode == "poisson_bd_mean"
-            else reflected_bd_reverse_sampler if sample_bridge_mode == "reflected_bd"
-            else bd_reverse_sampler
-        )
+        # Create bridge instance for sampling (same as training)
+        bridge_kwargs = {
+            'n_steps': args.steps,
+            'lam0': args.lam0,
+            'lam1': args.lam1,
+            'schedule_type': args.bd_schedule,
+            'time_schedule': sample_time_schedule,
+            **schedule_kwargs
+        }
+        
+        if sample_bridge_mode == "poisson_bd":
+            bridge = SkellamBridge(**bridge_kwargs)
+        elif sample_bridge_mode == "reflected_bd":
+            bridge = ReflectedPoissonBDBridge(**bridge_kwargs)
+        elif sample_bridge_mode == "poisson_bd_mean":
+            bridge_kwargs['mh_sweeps'] = args.mh_sweeps
+            bridge = SkellamMeanConstrainedBridge(**bridge_kwargs)
+        else:
+            raise ValueError(f"Unknown sampling bridge: {sample_bridge_mode}")
+        
+        # All bridges can optionally receive mu0 for consistency
+        mu0 = x0_target.float().mean(0)  # (d,)
+        
+        # Use bridge's built-in reverse sampler
         if sample_bridge_mode == "poisson_bd_mean":
-            mu0 = x0_target.float().mean(0)  # (d,)
-            sweeps = getattr(args, "mh_sweeps", 10)
-            x0_samples, trajectory, x_hat_trajectory, M_trajectory = reverse_sampler(
-                x1_batch, z_batch, model,
-                K=args.steps,
-                lam0=args.lam_p0,
-                lam1=args.lam_p1,
+            x0_samples, trajectory, x_hat_trajectory, M_trajectory = bridge.reverse_sampler(
+                x1=x1_batch,
+                z=z_batch,
                 mu0=mu0,
-                sweeps=sweeps,
+                model=model,
                 device=device,
-                schedule_type=args.bd_schedule,
                 return_trajectory=True,
                 return_x_hat=True,
                 return_M=True,
             )
         else:
-            x0_samples, trajectory, x_hat_trajectory, M_trajectory = reverse_sampler(
-                x1_batch, z_batch, model,
-                K=args.steps,
+            # Regular and reflected bridges - mu0 is optional but we can pass it
+            x0_samples, trajectory, x_hat_trajectory, M_trajectory = bridge.reverse_sampler(
+                x1=x1_batch,
+                z=z_batch,
+                model=model,
                 device=device,
-                schedule_type=args.bd_schedule,
-                lam0=args.lam0,
-                lam1=args.lam1,
                 return_trajectory=True,
                 return_x_hat=True,
                 return_M=True,
-                # x0=x0_target,
             )
         
         # Compute statistics
@@ -442,53 +395,34 @@ def main():
         # Plot true marginal distributions from bridge
         bridge_collate = None
         if args.bridge == "poisson_bd":
-            bridge_collate = PoissonBDBridgeCollate(
+            bridge_collate = SkellamBridge(
                 n_steps=args.steps,
-                lam_p0=args.lam_p0,
-                lam_p1=args.lam_p1,
-                lam_m0=args.lam_m0,
-                lam_m1=args.lam_m1,
-                schedule_type=args.bd_schedule,
-                time_schedule=args.time_schedule,
-                homogeneous_time=False,  # We want different times
-                **schedule_kwargs
-            )
-        elif args.bridge == "polya_bd":
-            # Note: polya_bd uses the same collate as poisson_bd
-            bridge_collate = PoissonBDBridgeCollate(
-                n_steps=args.steps,
-                lam_p0=args.lam_p0,
-                lam_p1=args.lam_p1,
-                lam_m0=args.lam_m0,
-                lam_m1=args.lam_m1,
+                lam0=args.lam0,
+                lam1=args.lam1,
                 schedule_type=args.bd_schedule,
                 time_schedule=args.time_schedule,
                 homogeneous_time=False,  # We want different times
                 **schedule_kwargs
             )
         elif args.bridge == "reflected_bd":
-            bridge_collate = ReflectedPoissonBDBridgeCollate(
+            bridge_collate = ReflectedPoissonBDBridge(
                 n_steps=args.steps,
-                lam_p0=args.lam0,  # reflected_bd uses same lambda for both
-                lam_p1=args.lam1,
-                lam_m0=args.lam0,
-                lam_m1=args.lam1,
+                lam0=args.lam0,
+                lam1=args.lam1,
                 schedule_type=args.bd_schedule,
                 time_schedule=args.time_schedule,
                 homogeneous_time=False,  # We want different times
                 **schedule_kwargs
             )
         elif args.bridge == "poisson_bd_mean":
-            bridge_collate = PoissonMeanConstrainedBDBridgeCollate(
+            bridge_collate = SkellamMeanConstrainedBridge(
                 n_steps=args.steps,
-                lam_p0=args.lam_p0,
-                lam_p1=args.lam_p1,
-                lam_m0=args.lam_m0,
-                lam_m1=args.lam_m1,
+                lam0=args.lam0,
+                lam1=args.lam1,
                 schedule_type=args.bd_schedule,
                 time_schedule=args.time_schedule,
                 homogeneous_time=False,  # We want different times
-                mh_sweeps=getattr(args, "mh_sweeps", 5),
+                mh_sweeps=args.mh_sweeps,
                 **schedule_kwargs
             )
         

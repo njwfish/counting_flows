@@ -6,14 +6,16 @@ Provides two core dataset classes for count flow scenarios:
 2. BetaBinomialDataset: BetaBinomial endpoints with small alpha/beta (tricky distribution)
 
 Each dataset can use either fixed or random base measures.
-Time scheduling is handled by collate functions, not datasets.
+Time scheduling is handled by bridge classes, not datasets.
 """
 
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.distributions import Poisson, Binomial, Beta
 import numpy as np
-from .bridges import PoissonBDBridgeCollate, ReflectedPoissonBDBridgeCollate, PoissonMeanConstrainedBDBridgeCollate
+from .bridges.skellam import SkellamBridge
+from .bridges.reflected import ReflectedPoissonBDBridge
+from .bridges.constrained import SkellamMeanConstrainedBridge
 from abc import ABC, abstractmethod
 
 
@@ -257,62 +259,55 @@ def create_dataset(dataset_type, **kwargs):
 
 def create_dataloader(bridge_type, dataset_type, batch_size, **kwargs):
     """
-    Factory function to create DataLoader with appropriate collate function
+    Factory function to create DataLoader with appropriate bridge function
     
     Args:
-        bridge_type: "poisson", "nb", "poisson_bd", "polya_bd", or "reflected_bd"
+        bridge_type: "poisson_bd", "reflected_bd", or "poisson_bd_mean"
         dataset_type: "poisson" or "betabinomial"
         batch_size: Batch size for DataLoader
-        **kwargs: Arguments passed to Dataset and Collate constructors
+        **kwargs: Arguments passed to Dataset and Bridge constructors
     
     Returns:
-        DataLoader instance with custom collate function, Dataset instance
+        DataLoader instance with custom bridge function, Dataset instance
     """
-    # Extract collate-specific arguments
-    collate_kwargs = {}
+    # Extract bridge-specific arguments
+    bridge_kwargs = {}
     dataset_kwargs = {}
     
-    # Split kwargs between dataset and collate
+    # Split kwargs between dataset and bridge
     dataset_keys = ['size', 'd', 'lam_scale', 'fixed_base', 'fixed_lam', 
                    'n_scale', 'alpha_range', 'beta_range', 'fixed_n', 'fixed_alpha', 'fixed_beta',
                    'homogeneous']  # homogeneous goes to dataset
-    collate_keys = ['n_steps', 'r_min', 'r_max', 'r_schedule', 'time_schedule',
+    bridge_keys = ['n_steps', 'lam0', 'lam1', 'schedule_type', 'time_schedule',
                    'decay_rate', 'steepness', 'midpoint', 'power', 'concentration',
-                   'r', 'beta', 'lam_p0', 'lam_p1', 'lam_m0', 'lam_m1', 'schedule_type',
-                   'lam0', 'lam1', 'homogeneous_time']  # homogeneous_time goes to collates
+                   'homogeneous_time', 'mh_sweeps']  # homogeneous_time goes to bridges
     
     for key, value in kwargs.items():
         if key in dataset_keys:
             dataset_kwargs[key] = value
-        elif key in collate_keys:
-            collate_kwargs[key] = value
+        elif key in bridge_keys:
+            bridge_kwargs[key] = value
     
     # Always use dataset's built-in batch generation
     dataset_kwargs['batch_size'] = batch_size
     dataset = create_dataset(dataset_type, **dataset_kwargs)
     
-    # Create appropriate collate function
-    if bridge_type == "poisson":
-        collate_fn = PoissonBridgeCollate(**collate_kwargs)
-    elif bridge_type == "nb":
-        collate_fn = NBBridgeCollate(**collate_kwargs)
-    elif bridge_type == "poisson_bd":
-        collate_fn = PoissonBDBridgeCollate(**collate_kwargs)
-    elif bridge_type == "polya_bd":
-        collate_fn = PolyaBDBridgeCollate(**collate_kwargs)
+    # Create appropriate bridge function
+    if bridge_type == "poisson_bd":
+        bridge_fn = SkellamBridge(**bridge_kwargs)
     elif bridge_type == "reflected_bd":
-        collate_fn = ReflectedPoissonBDBridgeCollate(**collate_kwargs)
+        bridge_fn = ReflectedPoissonBDBridge(**bridge_kwargs)
     elif bridge_type == "poisson_bd_mean":
-        collate_fn = PoissonMeanConstrainedBDBridgeCollate(**collate_kwargs)
+        bridge_fn = SkellamMeanConstrainedBridge(**bridge_kwargs)
     else:
-        raise ValueError(f"Unknown bridge type: {bridge_type}")
+        raise ValueError(f"Unknown bridge type: {bridge_type}. Supported types: poisson_bd, reflected_bd, poisson_bd_mean")
     
     # Create DataLoader with batch_size=1 since dataset produces full batches
     dataloader = DataLoader(
         dataset,
         batch_size=1,
         shuffle=True,
-        collate_fn=collate_fn,
+        collate_fn=bridge_fn,
         num_workers=0,
         pin_memory=False,  # Disabled to avoid GPU tensor pinning issues
         drop_last=True

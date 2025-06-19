@@ -61,11 +61,9 @@ def make_time_spacing_schedule(K, schedule_type="uniform", **kwargs):
 
 
 def make_lambda_schedule(
-    K: int,
-    lam_p0: float = 8.0,
-    lam_p1: float = 8.0,
-    lam_m0: float = 8.0,
-    lam_m1: float = 8.0,
+    timepoints: torch.Tensor,
+    lam0: float = 8.0,
+    lam1: float = 8.0,
     schedule_type: str = "constant",
     device="cpu",
 ):
@@ -77,20 +75,18 @@ def make_lambda_schedule(
     independently to birth (+) and death (−) rates.
     
     Args:
-        K: Number of steps
-        lam_p0, lam_p1: Birth rate at t=0 and t=1
-        lam_m0, lam_m1: Death rate at t=0 and t=1
+        timepoints: Time points (K+1,)
+        lam0, lam1: Birth rate at t=0 and t=1
         schedule_type: How rates change over time
         device: Device for computation
     
     Returns:
-        grid: Time points (K+1,)
         lam_plus: Birth rates λ⁺(t) (K+1,)
         lam_minus: Death rates λ⁻(t) (K+1,)
         Λp: Cumulative birth integral (K+1,)
         Λm: Cumulative death integral (K+1,)
     """
-    grid = torch.linspace(0.0, 1.0, K + 1, device=device)
+    
 
     def _interp(u, lo, hi):
         if schedule_type == "linear":
@@ -99,15 +95,15 @@ def make_lambda_schedule(
             return lo + 0.5 * (hi - lo) * (1.0 - torch.cos(torch.pi * u))
         return torch.full_like(u, lo)
 
-    lam_plus  = _interp(grid, lam_p0, lam_p1)
-    lam_minus = _interp(grid, lam_m0, lam_m1)
+    lam_plus  = _interp(timepoints, lam0, lam1)
+    lam_minus = _interp(timepoints, lam0, lam1)
 
     # trapezoidal cum‑integral ∫ λ(t) dt
-    dt = grid[1:] - grid[:-1]
+    dt = timepoints[1:] - timepoints[:-1]
     cum_plus  = torch.cumsum(0.5 * (lam_plus[1:]  + lam_plus[:-1])  * dt, dim=0)
     cum_minus = torch.cumsum(0.5 * (lam_minus[1:] + lam_minus[:-1]) * dt, dim=0)
 
     Λp = torch.cat([torch.zeros(1, device=device), cum_plus])
     Λm = torch.cat([torch.zeros(1, device=device), cum_minus])
-    return grid, lam_plus, lam_minus, Λp, Λm
+    return lam_plus, lam_minus, Λp, Λm
  
