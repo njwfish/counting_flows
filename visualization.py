@@ -8,71 +8,7 @@ import torch
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import stats
-from .scheduling import make_time_spacing_schedule
-
-
-def plot_schedule_comparison(K=50, title="Schedule Comparison"):
-    """Visualize different r(t) and Φ(t) schedule types"""
-    fig, axes = plt.subplots(3, 3, figsize=(18, 15))
-    fig.suptitle(title)
-    
-    # R schedules (for NB bridge)
-    schedule_types = ["linear", "cosine", "exponential", "polynomial", "sqrt", "sigmoid"]
-    
-    for i, schedule_type in enumerate(schedule_types):
-        if i >= 6:  # Only plot first 6 schedules
-            break
-            
-        ax = axes[i//3, i%3]
-        
-        try:
-            # Default parameters for each schedule
-            kwargs = {}
-            if schedule_type == "exponential":
-                kwargs = {'growth_rate': 2.0}
-            elif schedule_type == "polynomial":
-                kwargs = {'power': 2.0}
-            elif schedule_type == "sigmoid":
-                kwargs = {'steepness': 10.0, 'midpoint': 0.5}
-            
-            phi_sched, R = make_phi_schedule(K, phi_min=0.0, phi_max=20.0, 
-                                           schedule_type=schedule_type, **kwargs)
-            times = torch.linspace(0, 1, K+1)
-            
-            # Plot Φ(t) schedule
-            ax.plot(times.numpy(), phi_sched.numpy(), linewidth=2, label=f'Φ(t) {schedule_type}', color='blue')
-            
-            ax.set_title(f'{schedule_type.title()} Schedule')
-            ax.set_xlabel('Time t')
-            ax.set_ylabel('Φ(t) value', color='blue')
-            ax.grid(True, alpha=0.3)
-            ax.tick_params(axis='y', labelcolor='blue')
-            ax.legend(loc='upper left')
-            
-        except Exception as e:
-            ax.text(0.5, 0.5, f'Error: {str(e)}', transform=ax.transAxes, ha='center')
-            ax.set_title(f'{schedule_type.title()} (Error)')
-    
-    # Add comparison plot showing different phi schedules
-    if len(schedule_types) >= 2:
-        ax = axes[2, 0]
-        
-        # Compare different phi schedules
-        phi_linear, _ = make_phi_schedule(K, phi_min=0.0, phi_max=20.0, schedule_type="linear")
-        phi_cosine, _ = make_phi_schedule(K, phi_min=0.0, phi_max=20.0, schedule_type="cosine")
-        times = torch.linspace(0, 1, K+1)
-        
-        ax.plot(times.numpy(), phi_linear.numpy(), linewidth=2, label='Linear Φ(t)', color='blue')
-        ax.plot(times.numpy(), phi_cosine.numpy(), linewidth=2, label='Cosine Φ(t)', color='green')
-        ax.set_title('Comparison: Different Φ(t) Schedules')
-        ax.set_xlabel('Time t')
-        ax.set_ylabel('Φ(t) value')
-        ax.grid(True, alpha=0.3)
-        ax.legend()
-    
-    plt.tight_layout()
-    return fig
-
+from .bridges.scheduling import make_time_spacing_schedule
 
 def plot_time_spacing_comparison(K=50, title="Time Spacing Comparison"):
     """Visualize different time spacing schedules"""

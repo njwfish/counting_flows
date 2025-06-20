@@ -1,14 +1,14 @@
 import torch
 from torch.distributions import Binomial
 import numpy as np
-from ..scheduling import make_time_spacing_schedule, make_lambda_schedule
+from ..bridges.scheduling import make_time_spacing_schedule, make_lambda_schedule
 from ..sampling.hypergeom import hypergeometric
 
 
 
-class ReflectedPoissonBDBridge:
+class ReflectedSkellamBridge:
     """
-    Collate for *reflected* Poisson birth–death bridge with time‑varying λ₊, λ₋.
+    Collate for *reflected* Skellam birth–death bridge with time‑varying λ₊, λ₋.
     Produces x_t drawn via Hypergeometric(N,B₁,N_t).
     """
 

@@ -1,7 +1,7 @@
 import torch
 from torch.distributions import Binomial
 import numpy as np
-from ..scheduling import make_time_spacing_schedule, make_lambda_schedule
+from ..bridges.scheduling import make_time_spacing_schedule, make_lambda_schedule
 from ..sampling.hypergeom import hypergeometric
 from ..sampling.mean_constrained import mh_mean_constrained_update
 
