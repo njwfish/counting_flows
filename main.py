@@ -14,7 +14,7 @@ from .cli import parse_args
 from .models import EnergyScorePosterior
 from .training import train_model, create_training_dataloader
 from .bridges.skellam import SkellamBridge
-from .bridges.reflected import ReflectedPoissonBDBridge
+from .bridges.reflected import ReflectedSkellamBridge
 from .bridges.constrained import SkellamMeanConstrainedBridge
 from .visualization import (
     plot_time_spacing_comparison,
@@ -302,7 +302,7 @@ def main():
         if sample_bridge_mode == "poisson_bd":
             bridge = SkellamBridge(**bridge_kwargs)
         elif sample_bridge_mode == "reflected_bd":
-            bridge = ReflectedPoissonBDBridge(**bridge_kwargs)
+            bridge = ReflectedSkellamBridge(**bridge_kwargs)
         elif sample_bridge_mode == "poisson_bd_mean":
             bridge_kwargs['mh_sweeps'] = args.mh_sweeps
             bridge = SkellamMeanConstrainedBridge(**bridge_kwargs)
@@ -405,7 +405,7 @@ def main():
                 **schedule_kwargs
             )
         elif args.bridge == "reflected_bd":
-            bridge_collate = ReflectedPoissonBDBridge(
+            bridge_collate = ReflectedSkellamBridge(
                 n_steps=args.steps,
                 lam0=args.lam0,
                 lam1=args.lam1,

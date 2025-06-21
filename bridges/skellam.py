@@ -1,7 +1,7 @@
 import torch
 from torch.distributions import Binomial
 import numpy as np
-from ..scheduling import make_time_spacing_schedule, make_lambda_schedule
+from ..bridges.scheduling import make_time_spacing_schedule, make_lambda_schedule
 from ..sampling.hypergeom import hypergeometric
 
 
@@ -63,15 +63,14 @@ class SkellamBridge:
 
     def __call__(self, batch, t_target=None):
         # batch = list of dicts with keys 'x0','x1','z'
-        x0 = torch.stack([b["x0"] for b in batch])  # (1,B,d) -> squeeze to (B,d)
-        x1 = torch.stack([b["x1"] for b in batch])
-        z  = torch.stack([b["z"]  for b in batch])
-        
-        # Handle case where dataset already produces batches (extra dimension from DataLoader)
-        if len(x0.shape) == 3:  # (1, B, d)
-            x0 = x0.squeeze(0)  # (B, d)
-            x1 = x1.squeeze(0)  # (B, d)
-            z = z.squeeze(0)    # (B, context_dim)
+        if isinstance(batch, list):
+            x0 = torch.stack([b["x0"] for b in batch])
+            x1 = torch.stack([b["x1"] for b in batch])
+            z = torch.stack([b["z"]  for b in batch])
+        else:
+            x0 = batch["x0"]
+            x1 = batch["x1"]
+            z = batch["z"]
         
         device = x0.device
         B, d = x0.shape

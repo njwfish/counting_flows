@@ -8,10 +8,10 @@ Poisson and Negative Binomial bridges.
 from .models import EnergyScorePosterior
 from .datasets import PoissonDataset, BetaBinomialDataset, create_dataloader, InfiniteDataLoader
 from .bridges.skellam import SkellamBridge
-from .bridges.reflected import ReflectedPoissonBDBridge
+from .bridges.reflected import ReflectedSkellamBridge
 from .bridges.constrained import SkellamMeanConstrainedBridge
 from .training import train_model, create_training_dataloader
-from .scheduling import make_time_spacing_schedule
+from .bridges.scheduling import make_time_spacing_schedule
 
 __version__ = "0.1.0"
 __author__ = "Your Name"
@@ -21,7 +21,7 @@ __all__ = [
     "PoissonDataset",
     "BetaBinomialDataset",
     "SkellamBridge",
-    "ReflectedPoissonBDBridge", 
+    "ReflectedSkellamBridge", 
     "SkellamMeanConstrainedBridge",
     "create_dataloader",
     "InfiniteDataLoader",

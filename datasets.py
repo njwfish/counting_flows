@@ -14,7 +14,7 @@ from torch.utils.data import Dataset, DataLoader
 from torch.distributions import Poisson, Binomial, Beta
 import numpy as np
 from .bridges.skellam import SkellamBridge
-from .bridges.reflected import ReflectedPoissonBDBridge
+from .bridges.reflected import ReflectedSkellamBridge
 from .bridges.constrained import SkellamMeanConstrainedBridge
 from abc import ABC, abstractmethod
 
@@ -296,7 +296,7 @@ def create_dataloader(bridge_type, dataset_type, batch_size, **kwargs):
     if bridge_type == "poisson_bd":
         bridge_fn = SkellamBridge(**bridge_kwargs)
     elif bridge_type == "reflected_bd":
-        bridge_fn = ReflectedPoissonBDBridge(**bridge_kwargs)
+        bridge_fn = ReflectedSkellamBridge(**bridge_kwargs)
     elif bridge_type == "poisson_bd_mean":
         bridge_fn = SkellamMeanConstrainedBridge(**bridge_kwargs)
     else:

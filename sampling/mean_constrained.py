@@ -479,16 +479,19 @@ def constrained_multinomial_proposal_torch(
     # 1) compute column residuals
     col_sum = x.sum(dim=0)            # (d,)
     R       = S - col_sum            # (d,)
-    sgn     = R.sign().long()         # (d,)
-    Rabs    = R.abs().long()          # (d,)
+    sgn     = R.sign()         # (d,)
+    Rabs    = R.abs()          # (d,)
 
     # 2) directional weights
     diff    = (x_exp - x).float() * sgn.unsqueeze(0)   # (B,d)
-    weights = diff.clamp(min=0.0)                     # zero out opp. dir
+    # print("S", S)
+    # print("col_sum", col_sum)
+    # print("R", R)
+    # print("diff", diff.max(), diff.min())
+    # print("x_exp", x_exp, x_exp.max(), x_exp.min())
+    # print("x", x, x.max(), x.min())
+    weights = torch.exp(diff / 10) # diff.clamp(min=0.0)                     # zero out opp. dir
     wsum    = weights.sum(dim=0, keepdim=True)        # (1,d)
-    # avoid all-zero
-    weights[:, wsum[0]==0] += 1.0
-    wsum    = weights.sum(dim=0, keepdim=True)        # updated
     probs   = weights / wsum                          # (B,d)
 
     # 3) Scatter-add multinomial sampling

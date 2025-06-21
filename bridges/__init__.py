@@ -8,11 +8,11 @@ This module contains bridge implementations for different count flow scenarios:
 """
 
 from .skellam import SkellamBridge
-from .reflected import ReflectedPoissonBDBridge
+from .reflected import ReflectedSkellamBridge
 from .constrained import SkellamMeanConstrainedBridge
 
 __all__ = [
     "SkellamBridge",
-    "ReflectedPoissonBDBridge", 
+    "ReflectedSkellamBridge", 
     "SkellamMeanConstrainedBridge"
 ] 

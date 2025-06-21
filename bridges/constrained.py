@@ -1,7 +1,7 @@
 import torch
 from torch.distributions import Binomial
 import numpy as np
-from ..scheduling import make_time_spacing_schedule, make_lambda_schedule
+from ..bridges.scheduling import make_time_spacing_schedule, make_lambda_schedule
 from ..sampling.hypergeom import hypergeometric
 from ..sampling.mean_constrained import mh_mean_constrained_update
 
@@ -46,19 +46,22 @@ class SkellamMeanConstrainedBridge:
         λ = λ.unsqueeze(-1).expand_as(diff)   # (B,d)
         M  = torch.poisson(λ).long().to(device)
         N  = diff.abs() + 2 * M
-        B1 = (N + diff) >> 1
+        B1 = (N + diff) // 2.0
         return N, M, B1
 
     # ------------------------------------------------------------------ main
     def __call__(self, batch, t_target=None):
         # unpack
-        x0 = torch.stack([b["x0"] for b in batch])  # (B,d)
-        x1 = torch.stack([b["x1"] for b in batch])
-        z  = torch.stack([b["z"]  for b in batch])
+        if isinstance(batch, list):
+            x0 = torch.stack([b["x0"] for b in batch])  # (B,d)
+            x1 = torch.stack([b["x1"] for b in batch])
+        else:
+            x0 = batch["x0"]
+            x1 = batch["x1"]
 
         # dataloader might add an extra dim
         if x0.ndim == 3:
-            x0, x1, z = x0.squeeze(0), x1.squeeze(0), z.squeeze(0)
+            x0, x1 = x0.squeeze(0), x1.squeeze(0)
 
         device = x0.device
         B, d   = x0.shape
@@ -107,7 +110,9 @@ class SkellamMeanConstrainedBridge:
         S_target = (mu_t * B).round().long()           # (B,)
 
         # expected x for proposal weights
-        p_birth = B1.float() / N.float()
+        N_z = N.float()
+        N_z[N_z == 0] = 1.0
+        p_birth = (B1.float() / N_z.float()) * (N_z != 0)
         E_Bt    = p_birth * N_t.float()
         x_exp   = x0.float() + 2*E_Bt - N_t.float()
 
@@ -125,14 +130,13 @@ class SkellamMeanConstrainedBridge:
 
         # recompute diff & slack pairs after MH (keeps N_t fixed)
         diff_t = (x_t - x0)
-        M_t    = ((N_t - diff_t.abs()) >> 1)
+        M_t    = (N_t - diff_t.abs()) // 2.0
 
         return {
             "x0"   : x0,
             "x1"   : x1,
             "x_t"  : x_t,
             "t"    : t,          
-            "z"    : z,
             "M"    : M_t
         }
 
@@ -157,6 +161,8 @@ class SkellamMeanConstrainedBridge:
         the state is projected onto the hyper-plane
             { ‖x‖₁  =  round(B · μ_k) }.
         """
+        if not isinstance(z, dict):
+            raise ValueError("z must be a dictionary")
         device = torch.device(device)
         x_t    = x1.to(device).long()           # current state (starts at X₁)
         Bbatch, d = x_t.shape
@@ -170,7 +176,7 @@ class SkellamMeanConstrainedBridge:
 
         # ── first model call (t=1) ──────────────────────────────────────
         t1         = torch.ones_like(x_t[:, :1])
-        x0_hat_t   = model.sample(x_t, M_t, z, t1).round().long()
+        x0_hat_t   = model.sample(x_t, M_t, t1, **z).round().long()
         diff       = x_t - x0_hat_t
         N_t        = diff.abs() + 2 * M_t
         B_t        = (N_t + diff) >> 1
@@ -187,7 +193,7 @@ class SkellamMeanConstrainedBridge:
 
             # single model prediction at t_k
             t_tensor  = torch.zeros_like(x_t[:, :1]) + self.time_points[k-1]
-            x0_hat_t  = model.sample(x_t, M_t, z, t_tensor).round().long()
+            x0_hat_t  = model.sample(x_t, M_t, t_tensor, **z).round().long()
             diff      = x_t - x0_hat_t
             N_t       = diff.abs() + 2 * M_t
             B_t       = (N_t + diff) >> 1
