@@ -185,7 +185,6 @@ class SkellamMeanConstrainedBridge:
         x_t_tensor = torch.tensor(x_t).to('cuda').float()
         M_t_tensor = torch.tensor(M_t).to('cuda').float()
         t1_tensor = torch.tensor(t1).to('cuda').float()
-        print(x_t_tensor.shape, M_t_tensor.shape, t1_tensor.shape)
         x0_hat_t   = model.sample(x_t_tensor, M_t_tensor, t1_tensor, **z).cpu().numpy()
         x0_hat_t   = np.round(x0_hat_t).astype(np.int64)
         weighted_dist = get_proportional_weighted_dist(x0_hat_t)
