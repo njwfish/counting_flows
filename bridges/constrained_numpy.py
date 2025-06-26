@@ -1,7 +1,9 @@
 import numpy as np
+import torch
 from ..bridges.scheduling import make_time_spacing_schedule, make_lambda_schedule
 from ..sampling.hypergeom import hypergeometric
 from ..sampling.mean_constrained import mh_mean_constrained_update
+from ..sampling.distribute_shift_numpy import get_proportional_weighted_dist, sample_pert
 
 
 class SkellamMeanConstrainedBridge:
@@ -183,6 +185,7 @@ class SkellamMeanConstrainedBridge:
         x_t_tensor = torch.tensor(x_t).to('cuda').float()
         M_t_tensor = torch.tensor(M_t).to('cuda').float()
         t1_tensor = torch.tensor(t1).to('cuda').float()
+        print(x_t_tensor.shape, M_t_tensor.shape, t1_tensor.shape)
         x0_hat_t   = model.sample(x_t_tensor, M_t_tensor, t1_tensor, **z).cpu().numpy()
         x0_hat_t   = np.round(x0_hat_t).astype(np.int64)
         weighted_dist = get_proportional_weighted_dist(x0_hat_t)
