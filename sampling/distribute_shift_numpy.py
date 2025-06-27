@@ -1,8 +1,9 @@
 import numpy as np
 
 def get_proportional_weighted_dist(X):
-    weighted_dist = (X / X.sum(axis=0))
-    weighted_dist[:, X.sum(axis=0) == 0] = 1
+    dist_sum = X.sum(axis=0)
+    weighted_dist = (X / np.clip(dist_sum, 1, None))
+    weighted_dist[:, dist_sum == 0] = 1
     weighted_dist = weighted_dist.astype(np.float64)
     weighted_dist /= weighted_dist.sum(axis=0)
     return weighted_dist
@@ -36,7 +37,8 @@ def sample_multinomial_batch(probs, counts, max_count=None, max_rejections=100):
                 n_resample = np.sum(s[over_max] - mc[over_max])
                 s[over_max] = mc[over_max]
                 # assert np.sum(s) + n_resample == c
-                s += np.random.multinomial(n_resample, p)
+                s += np.random.multinomial(n_resample.astype(np.int64), p)
+
                 over_max = s > mc
                 num_rejections += 1
                 if num_rejections > max_rejections:

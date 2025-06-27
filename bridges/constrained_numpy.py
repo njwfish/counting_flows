@@ -150,6 +150,8 @@ class SkellamMeanConstrainedBridge:
         return_trajectory: bool = False,
         return_x_hat:     bool = False,
         return_M:         bool = False,
+        guidance_x0:      np.ndarray = None,
+        guidance_schedule: np.ndarray = None,
     ):
         """
         Reverse sampler that *enforces the running batch mean*
@@ -185,11 +187,15 @@ class SkellamMeanConstrainedBridge:
         x_t_tensor = torch.tensor(x_t).to('cuda').float()
         M_t_tensor = torch.tensor(M_t).to('cuda').float()
         t1_tensor = torch.tensor(t1).to('cuda').float()
-        x0_hat_t   = model.sample(x_t_tensor, M_t_tensor, t1_tensor, **z).cpu().numpy()
-        x0_hat_t   = np.round(x0_hat_t).astype(np.int64)
-        weighted_dist = get_proportional_weighted_dist(x0_hat_t)
-        x0_hat_t = sample_pert(x0_hat_t, weighted_dist, mu0)
+        x0_hat_t_out   = model.sample(x_t_tensor, M_t_tensor, t1_tensor, **z).cpu().numpy()
+        x0_hat_t_out   = np.round(x0_hat_t_out).astype(np.int64)
 
+        if guidance_x0 is not None:
+            guidance_mix = 1
+            x0_hat_t_out =  (guidance_mix * guidance_x0 + (1 - guidance_mix) * x0_hat_t_out).round().astype(np.int64)
+
+        weighted_dist = get_proportional_weighted_dist(x0_hat_t_out)
+        x0_hat_t = sample_pert(x0_hat_t_out, weighted_dist, mu0)
 
         diff       = x_t - x0_hat_t
         N_t        = np.abs(diff) + 2 * M_t
@@ -212,8 +218,13 @@ class SkellamMeanConstrainedBridge:
             t_tensor = torch.tensor(t_tensor).to('cuda').float()
             x0_hat_t_out  = model.sample(x_t_tensor, M_t_tensor, t_tensor, **z).cpu().numpy()
             x0_hat_t_out  = np.round(x0_hat_t_out).astype(np.int64)
+
+            if guidance_x0 is not None:
+                guidance_mix = guidance_schedule[k-1]
+                x0_hat_t_out = (guidance_mix * guidance_x0 + (1 - guidance_mix) * x0_hat_t_out).round().astype(np.int64)
+
             weighted_dist = get_proportional_weighted_dist(x0_hat_t_out)
-            x0_hat_t = sample_pert(x0_hat_t_out, weighted_dist, mu0 - x0_hat_t_out.mean(axis=0))
+            x0_hat_t = sample_pert(x0_hat_t_out.astype(np.int64), weighted_dist, mu0 - x0_hat_t_out.mean(axis=0))
 
             print(np.max(np.abs(x0_hat_t_out - x0_hat_t) / (x0_hat_t_out + 1)), (mu0 - x0_hat_t_out.mean(axis=0)).max(), (mu0-x0_hat_t.mean(axis=0)).max())
 

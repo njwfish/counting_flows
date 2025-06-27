@@ -109,7 +109,7 @@ class SkellamBridge:
             num_draws=N_t
         )
 
-        x_t = x0 + (2 * B_t - N_t)          # (B, d)
+        x_t = x1 - 2 * (B1 - B_t) + (N - N_t)          # (B, d)
 
         diff_t = (x_t - x0).abs()          # (B,d)
         M_t    = ((N_t - diff_t) >> 1)     # integer tensor (B,d)
@@ -185,9 +185,9 @@ class SkellamBridge:
             )
 
             # reconstruct state at s and *derive* slack pairs
-            x_s = x0_hat_t + 2 * B_s - N_s
+            x_s = x_t - 2 * (B_t - B_s) + (N_t - N_s)
             diff_s = (x_s - x0_hat_t).abs()
-            M_s = ((N_s - diff_s) >> 1)   
+            M_s = (N_s - diff_s) // 2  
 
             # roll forward
             x_t, M_t = x_s, M_s
