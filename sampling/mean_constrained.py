@@ -200,88 +200,122 @@ def hypergeom_logpmf(k, N, K, n, backend='auto'):
 
 
 def mh_mean_constrained_update_torch(
-    x:       torch.LongTensor,    # (B,d)
-    x_exp:   torch.Tensor,        # (B,d)
-    S:       torch.LongTensor,    # (d,)
-    a:       torch.LongTensor,    # (B,d)
-    N_t:     torch.LongTensor,    # (B,d)
-    B_t:     torch.LongTensor,    # (B,d)
-    N_s:     torch.LongTensor,    # (B,d)
+    N_t:     torch.LongTensor,    # (B,d) total population at time-t
+    B_t:     torch.LongTensor,    # (B,d) total successes at time-t
+    N_s:     torch.LongTensor,    # (B,d) sample size at time-s
+    B_s:     torch.LongTensor,    # (B,d) sample successes at time-s
+    S:       torch.LongTensor,    # (d,)  target sum per column
     sweeps:  int = 10,
-    max_projections: int = 3,
+    max_projections: int = 5,
     override_support: bool = False
 ) -> torch.LongTensor:
     """Torch implementation of MH mean constrained update."""
-    B, d = x.shape
-    device = x.device
+    B, d = B_s.shape
+    device = B_s.device
 
-    # Initial projection
+    B_s = B_s.clone()
+    lower = torch.maximum(torch.tensor(0, device=device), N_s + B_t - N_t)
+    upper = torch.minimum(N_s, B_t)
+
     for _ in range(max_projections):
-        x, _ = constrained_multinomial_proposal_torch(x, x_exp, S, a, N_s, override_support=override_support)
-        if torch.all(x.sum(dim=0) == S):
+        B_s, _ = constrained_multinomial_proposal_torch(
+            N_t, B_t, N_s, B_s, S, override_support=False
+        )
+        if torch.all(B_s.sum(dim=0) == S):
             break
 
     for _ in range(sweeps):
-        # Sample pairs of rows (p_j, q_j) for each column j
-        p = torch.randint(B, (d,), device=device)
-        q = torch.randint(B, (d,), device=device)
-        neq_mask = (p != q)
+        can_inc = (B_s < upper)
+        can_dec = (B_s > lower)
 
-        j_idx = torch.arange(d, device=device)
+        cnt_inc = can_inc.sum(dim=0)
+        cnt_dec = can_dec.sum(dim=0)
 
-        # Construct proposed x
-        x_prop = x.clone()
-        x_prop[p, j_idx] += 1
-        x_prop[q, j_idx] -= 1
-
-        # Check for non-negative entries
-        support_mask = x_prop[q, j_idx] >= 0
-
-        # Check |x - a| <= N_s constraint
-        delta_p = (x_prop[p, j_idx] - a[p, j_idx]).abs()
-        delta_q = (x_prop[q, j_idx] - a[q, j_idx]).abs()
-        bound_mask = (delta_p <= N_s[p, j_idx]) & (delta_q <= N_s[q, j_idx])
-
-        valid_mask = support_mask & bound_mask & neq_mask
-
-        if not valid_mask.any():
+        good = (cnt_inc > 0) & (cnt_dec > 0)
+        if not good.any():
             continue
 
-        # current and proposed birth counts
-        def births(x_, a_, N_s_):
-            return (N_s_ + (x_ - a_)) // 2
+        cols = torch.nonzero(good).squeeze(1)
+        n_good = len(cols)
 
-        x_pj  = x[p, j_idx]
-        x_qj  = x[q, j_idx]
-        xp_pj = x_prop[p, j_idx]
-        xp_qj = x_prop[q, j_idx]
+        r_inc = torch.randint(high=cnt_inc[cols].max().item(), size=(n_good,), device=device) % cnt_inc[cols]
+        r_dec = torch.randint(high=cnt_dec[cols].max().item(), size=(n_good,), device=device) % cnt_dec[cols]
 
-        # Current births
-        Bsc_p = births(x_pj, a[p, j_idx], N_s[p, j_idx])
-        Bsc_q = births(x_qj, a[q, j_idx], N_s[q, j_idx])
-        # Proposed births
-        Bsp_p = births(xp_pj, a[p, j_idx], N_s[p, j_idx])
-        Bsp_q = births(xp_qj, a[q, j_idx], N_s[q, j_idx])
+        sub_inc = can_inc[:, cols]
+        sub_dec = can_dec[:, cols]
+
+        csum_inc = torch.cumsum(sub_inc, dim=0)
+        csum_dec = torch.cumsum(sub_dec, dim=0)
+
+        target_inc = r_inc.unsqueeze(0) + 1
+        target_dec = r_dec.unsqueeze(0) + 1
+
+        pick_inc = (csum_inc == target_inc) & sub_inc
+        pick_dec = (csum_dec == target_dec) & sub_dec
+
+        p_rows = torch.argmax(pick_inc.long(), dim=0)
+        q_rows = torch.argmax(pick_dec.long(), dim=0)
+        
+        neq = (p_rows != q_rows)
+        if not neq.any():
+            continue
+        
+        sel = torch.nonzero(neq).squeeze(1)
+        j_idx = cols[sel]
+        p_idx = p_rows[sel]
+        q_idx = q_rows[sel]
+        
+        curr_p = B_s[p_idx, j_idx]
+        curr_q = B_s[q_idx, j_idx]
+        prop_p = curr_p + 1
+        prop_q = curr_q - 1
+
+        p_lo = lower[p_idx, j_idx]
+        p_hi = upper[p_idx, j_idx]
+        q_lo = lower[q_idx, j_idx]
+        q_hi = upper[q_idx, j_idx]
+
+        support_ok = (prop_p >= p_lo) & (prop_p <= p_hi) & (prop_q >= q_lo) & (prop_q <= q_hi)
+        if not support_ok.any():
+            continue
+
+        sel_supp = torch.nonzero(support_ok).squeeze(1)
+        j_sel = j_idx[sel_supp]
+        p_sel = p_idx[sel_supp]
+        q_sel = q_idx[sel_supp]
+        curr_p = curr_p[sel_supp]
+        curr_q = curr_q[sel_supp]
+        prop_p = prop_p[sel_supp]
+        prop_q = prop_q[sel_supp]
 
         logp_curr = (
-            hypergeom_logpmf_torch(Bsc_p, N_t[p, j_idx], B_t[p, j_idx], N_s[p, j_idx]) +
-            hypergeom_logpmf_torch(Bsc_q, N_t[q, j_idx], B_t[q, j_idx], N_s[q, j_idx])
+            hypergeom_logpmf_torch(curr_p, N_t[p_sel,j_sel], B_t[p_sel,j_sel], N_s[p_sel,j_sel]) +
+            hypergeom_logpmf_torch(curr_q, N_t[q_sel,j_sel], B_t[q_sel,j_sel], N_s[q_sel,j_sel])
         )
         logp_prop = (
-            hypergeom_logpmf_torch(Bsp_p, N_t[p, j_idx], B_t[p, j_idx], N_s[p, j_idx]) +
-            hypergeom_logpmf_torch(Bsp_q, N_t[q, j_idx], B_t[q, j_idx], N_s[q, j_idx])
+            hypergeom_logpmf_torch(prop_p, N_t[p_sel,j_sel], B_t[p_sel,j_sel], N_s[p_sel,j_sel]) +
+            hypergeom_logpmf_torch(prop_q, N_t[q_sel,j_sel], B_t[q_sel,j_sel], N_s[q_sel,j_sel])
         )
 
-        alpha = (logp_prop - logp_curr).exp().clamp(max=1.0)
+        dlog = logp_prop - logp_curr
+        dlog = torch.clamp(dlog, -50, 50)
+        ratio = torch.exp(dlog)
+        ratio = torch.minimum(ratio, torch.tensor(1.0, device=device))
 
-        accept_mask = valid_mask & (torch.rand(d, device=device) < alpha)
+        accept = torch.rand(len(ratio), device=device) < ratio
+        if not accept.any():
+            continue
 
-        # Apply accepted proposals
-        accept_idx = j_idx[accept_mask]
-        x[p[accept_mask], accept_idx] += 1
-        x[q[accept_mask], accept_idx] -= 1
+        a_sel = torch.nonzero(accept).squeeze(1)
+        j_acc = j_sel[a_sel]
+        p_acc = p_sel[a_sel]
+        q_acc = q_sel[a_sel]
+        
+        # In-place updates can be tricky with indexing, use a safe way
+        B_s.index_put_((p_acc, j_acc), B_s[p_acc, j_acc] + 1)
+        B_s.index_put_((q_acc, j_acc), B_s[q_acc, j_acc] - 1)
 
-    return x
+    return B_s
 
 
 import numpy as np
@@ -394,9 +428,9 @@ def mh_mean_constrained_update_numpy(
         if not good.any():
             continue
 
-        cols = np.nonzero(good)[0]           # list of good j’s
+        cols = np.nonzero(good)[0]           # list of good j's
 
-        # 4) sample a random “rank” in each good column
+        # 4) sample a random "rank" in each good column
         r_inc = rng.integers(0, cnt_inc[cols])   # how many trues to skip
         r_dec = rng.integers(0, cnt_dec[cols])
 
@@ -595,31 +629,27 @@ def mh_mean_constrained_update(
             else:
                 return torch.tensor(inp)
         
-        x_torch = to_torch(x).long()
-        x_exp_torch = to_torch(x_exp).float()
-        S_torch = to_torch(S).long()
-        a_torch = to_torch(a).long()
         N_t_torch = to_torch(N_t).long()
         B_t_torch = to_torch(B_t).long()
         N_s_torch = to_torch(N_s).long()
+        B_s_torch = to_torch(B_s).long()
+        S_torch = to_torch(S).long()
         
         # Move to same device
-        device = x_torch.device
-        for tensor in [x_exp_torch, S_torch, a_torch, N_t_torch, B_t_torch, N_s_torch]:
+        device = B_s_torch.device
+        for tensor in [N_t_torch, B_t_torch, N_s_torch, S_torch]:
             if tensor.device.type == 'cuda':
                 device = tensor.device
                 break
         
-        x_torch = x_torch.to(device)
-        x_exp_torch = x_exp_torch.to(device)
-        S_torch = S_torch.to(device)
-        a_torch = a_torch.to(device)
         N_t_torch = N_t_torch.to(device)
         B_t_torch = B_t_torch.to(device)
         N_s_torch = N_s_torch.to(device)
+        B_s_torch = B_s_torch.to(device)
+        S_torch = S_torch.to(device)
         
         result_torch = mh_mean_constrained_update_torch(
-            x_torch, x_exp_torch, S_torch, a_torch, N_t_torch, B_t_torch, N_s_torch, sweeps, override_support=override_support
+            N_t_torch, B_t_torch, N_s_torch, B_s_torch, S_torch, sweeps, override_support=override_support
         )
         
         # Convert back
@@ -633,37 +663,39 @@ def mh_mean_constrained_update(
 
 @torch.compile
 def constrained_multinomial_proposal_torch(
-    x:     torch.LongTensor,    # (B,d)
-    x_exp: torch.Tensor,        # (B,d)
-    S:     torch.LongTensor,    # (d,) target *column*-sums
-    a:     torch.LongTensor,    # (B,d) current a = x0_hat_t
-    N_s:   torch.LongTensor,    # (B,d) latent total jumps at s
+    N_t: torch.LongTensor,     # (B,d)
+    B_t: torch.LongTensor,     # (B,d)
+    N_s: torch.LongTensor,     # (B,d)
+    B_s: torch.LongTensor,     # (B,d)
+    S:   torch.LongTensor,     # (d,)
     override_support: bool = False
-):
+) -> Tuple[torch.LongTensor, torch.LongTensor]:
     """Torch implementation of constrained multinomial proposal."""
-    B, d = x.shape
-    device = x.device
+    B, d = B_s.shape
+    device = B_s.device
     
-    # 1) compute column residuals
-    col_sum = x.sum(dim=0)            # (d,)
-    R       = S - col_sum            # (d,)
-    sgn     = R.sign()         # (d,)
-    Rabs    = R.abs()          # (d,)
+    # 1) get true hyper‐geom support per‐entry
+    lower = torch.maximum(torch.tensor(0),  N_s + B_t - N_t)   # (B,d)
+    upper = torch.minimum(N_s, B_t)              # (B,d)
 
-    # 2) directional weights
-    diff    = (x_exp - x).float() * sgn.unsqueeze(0)   # (B,d)
-    # print("S", S)
-    # print("col_sum", col_sum)
-    # print("R", R)
-    # print("diff", diff.max(), diff.min())
-    # print("x_exp", x_exp, x_exp.max(), x_exp.min())
-    # print("x", x, x.max(), x.min())
-    weights = torch.exp(diff / 10) # diff.clamp(min=0.0)                     # zero out opp. dir
-    wsum    = weights.sum(dim=0, keepdim=True)        # (1,d)
-    probs   = weights / wsum                          # (B,d)
+    # 2) expected under hypergeom
+    N_t_float = N_t.float()
+    B_s_exp = torch.where(N_t_float==0, 0.0, N_s.float() * (B_t.float()/N_t_float))
 
-    # 3) Scatter-add multinomial sampling
-    delta = torch.zeros_like(x)
+    # 3) column residuals & sign
+    col_sum = B_s.sum(dim=0)     # (d,)
+    R       = S - col_sum        # (d,)
+    sgn     = torch.sign(R).long()  # (d,)
+    Rabs    = torch.abs(R).long()   # (d,)
+
+    # 4) directional weights → probs
+    #    we want to favor moves that shrink |B_s - E[B_s]|
+    diff    = (B_s_exp - B_s.float()) * sgn.unsqueeze(0)   # (B,d)
+    w       = torch.logaddexp(torch.zeros_like(diff), diff) # (B,d)
+    probs   = w / w.sum(dim=0, keepdim=True)      # (B,d)
+
+    # 5) Scatter-add multinomial sampling
+    delta = torch.zeros_like(B_s)
     
     max_count = Rabs.max().item()
     if max_count > 0:
@@ -682,9 +714,6 @@ def constrained_multinomial_proposal_torch(
         valid_mask = count_range < Rabs.unsqueeze(1)  # (d, max_count)
         
         # Step 3: Use scatter_add like torch.distributions.Multinomial
-        # We need to scatter into a (B, d) tensor
-        # Flatten the valid samples and their target locations
-        
         # Get valid sample indices and their corresponding column indices
         valid_samples = sample_indices[valid_mask]  # (num_valid_samples,)
         
@@ -693,7 +722,6 @@ def constrained_multinomial_proposal_torch(
         valid_col_indices = col_indices[valid_mask]  # (num_valid_samples,)
         
         # Create flat indices into the (B, d) delta tensor
-        # flat_idx = row_idx * d + col_idx
         flat_indices = valid_samples * d + valid_col_indices  # (num_valid_samples,)
         
         # Create flat delta tensor and scatter_add
@@ -703,16 +731,13 @@ def constrained_multinomial_proposal_torch(
         # Reshape back to (B, d)
         delta = flat_delta.view(B, d)
 
-    # 4) raw proposal
-    x_prop = x + sgn.unsqueeze(0) * delta             # (B,d)
+    # 6) raw proposal and clip to true support
+    B_prop = B_s + sgn.unsqueeze(0) * delta             # (B,d)
 
-    # 5) clip each entry to remain in support
     if not override_support:
-        lower = a - N_s
-        upper = a + N_s
-        x_prop = torch.max(torch.min(x_prop, upper), lower)
+        B_prop = torch.max(torch.min(B_prop, upper), lower)
 
-    return x_prop, sgn
+    return B_prop, sgn
 
 
 import numpy as np
@@ -872,17 +897,17 @@ def constrained_multinomial_proposal(
         S_torch = to_torch(S).long()
         
         # Move to same device
-        device = N_t_torch.device
-        for tensor in [B_t_torch, S_torch, N_s_torch, B_s_torch]:
+        device = B_s_torch.device
+        for tensor in [N_t_torch, B_t_torch, N_s_torch, S_torch]:
             if tensor.device.type == 'cuda':
                 device = tensor.device
                 break
         
         N_t_torch = N_t_torch.to(device)
         B_t_torch = B_t_torch.to(device)
-        S_torch = S_torch.to(device)
         N_s_torch = N_s_torch.to(device)
         B_s_torch = B_s_torch.to(device)
+        S_torch = S_torch.to(device)
         
         B_prop_torch, sgn_torch = constrained_multinomial_proposal_torch(
             N_t_torch, B_t_torch, N_s_torch, B_s_torch, S_torch, override_support=override_support

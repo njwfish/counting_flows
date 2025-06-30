@@ -1,9 +1,9 @@
 import numpy as np
 import torch
-from ..bridges.scheduling import make_time_spacing_schedule, make_lambda_schedule
-from ..sampling.hypergeom import hypergeometric
-from ..sampling.mean_constrained import mh_mean_constrained_update
-from ..sampling.distribute_shift_numpy import get_proportional_weighted_dist, sample_pert
+from ..numpy.scheduling import make_time_spacing_schedule, make_lambda_schedule
+from ...sampling.hypergeom import hypergeometric
+from ...sampling.mean_constrained import mh_mean_constrained_update
+from ...sampling.distribute_shift_numpy import get_proportional_weighted_dist, sample_pert
 
 
 class SkellamMeanConstrainedBridge:

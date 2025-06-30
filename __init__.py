@@ -11,7 +11,7 @@ from .bridges.skellam import SkellamBridge
 from .bridges.reflected import ReflectedSkellamBridge
 from .bridges.constrained import SkellamMeanConstrainedBridge
 from .training import train_model, create_training_dataloader
-from .bridges.scheduling import make_time_spacing_schedule
+from .bridges.torch.scheduling import make_time_spacing_schedule
 
 __version__ = "0.1.0"
 __author__ = "Your Name"

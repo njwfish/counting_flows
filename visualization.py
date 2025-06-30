@@ -8,7 +8,7 @@ import torch
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import stats
-from .bridges.scheduling import make_time_spacing_schedule
+from .bridges.torch.scheduling import make_time_spacing_schedule
 
 def plot_time_spacing_comparison(K=50, title="Time Spacing Comparison"):
     """Visualize different time spacing schedules"""
