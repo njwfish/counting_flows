@@ -104,7 +104,7 @@ class SkellamBridge:
             "x_t" : x_t,
             "t"   : t,
             "z"   : z,
-            "M" : M_t, 
+            "M_t" : M_t, 
         }
     
     def reverse_sampler(

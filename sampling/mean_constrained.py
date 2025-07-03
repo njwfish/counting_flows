@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from scipy import special
-
+from typing import Union, Tuple, Optional
 
 
 def hypergeom_logpmf_torch(k, N, K, n):

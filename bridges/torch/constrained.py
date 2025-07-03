@@ -211,7 +211,7 @@ class SkellamMeanConstrainedBridge:
             "x1"   : x1,
             "x_t"  : x_t,
             "t"    : t,          
-            "M"    : M_t
+            "M_t"    : M_t
         }
 
     @torch.no_grad()

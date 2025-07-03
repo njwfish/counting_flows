@@ -7,12 +7,10 @@ This module contains bridge implementations for different count flow scenarios:
 - PoissonMeanConstrainedBDBridge: Mean-constrained birth-death bridge
 """
 
-from .skellam import SkellamBridge
-from .reflected import ReflectedSkellamBridge
-from .constrained import SkellamMeanConstrainedBridge
+from counting_flows.bridges.numpy.skellam import SkellamBridge
+from counting_flows.bridges.numpy.constrained import SkellamMeanConstrainedBridge
 
 __all__ = [
     "SkellamBridge",
-    "ReflectedSkellamBridge", 
     "SkellamMeanConstrainedBridge"
 ] 

@@ -13,9 +13,8 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.distributions import Poisson, Binomial, Beta
 import numpy as np
-from .bridges.skellam import SkellamBridge
-from .bridges.reflected import ReflectedSkellamBridge
-from .bridges.constrained import SkellamMeanConstrainedBridge
+from counting_flows.bridges.numpy.skellam import SkellamBridge
+from counting_flows.bridges.numpy.constrained import SkellamMeanConstrainedBridge
 from abc import ABC, abstractmethod
 
 
