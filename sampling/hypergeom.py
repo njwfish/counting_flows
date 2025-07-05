@@ -43,7 +43,7 @@ def hypergeometric_torch(total_count, success_count, num_draws):
     all_success = (success_count >= total_count)
     
     # Initialize result
-    result = torch.zeros_like(total_count)
+    result = torch.zeros_like(total_count, dtype=torch.int64)
     
     # Handle edge cases first
     result[zero_draws] = 0
@@ -63,7 +63,7 @@ def hypergeometric_torch(total_count, success_count, num_draws):
             validate_args=False  # We already handled edge cases
         )
         result[need_sampling] = dist.sample()
-    
+
     return result
 
 

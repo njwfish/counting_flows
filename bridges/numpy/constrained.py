@@ -1,10 +1,9 @@
 import numpy as np
 import torch
 from .scheduling import make_time_spacing_schedule, make_lambda_schedule
-from ...sampling.hypergeom import hypergeometric
+from ...sampling.hypergeom import hypergeometric_numpy
 from ...sampling.mean_constrained import mh_mean_constrained_update
 from ...sampling.distribute_shift_numpy import get_proportional_weighted_dist, sample_pert
-
 
 class SkellamMeanConstrainedBridge:
     """
@@ -105,10 +104,10 @@ class SkellamMeanConstrainedBridge:
 
         t      = self.time_points[k_idx]                            # (B,)
         w_t    = (self.Λp[k_idx] + self.Λm[k_idx]) / Λ_tot1       # (B,)
-        N_t    = np.random.binomial(N, np.expand_dims(w_t, -1))  # (B,d)
 
+        N_t    = np.random.binomial(N, np.expand_dims(w_t, -1))  # (B,d)
         # births up to t
-        B_t = hypergeometric(N, B1, N_t)
+        B_t = hypergeometric_numpy(N, B1, N_t)
 
         # ------------------------------------------------------------------
         #  Mean–constraint target  S_target
@@ -120,10 +119,10 @@ class SkellamMeanConstrainedBridge:
 
         # MH projection
         B_t = mh_mean_constrained_update(
-            N_s    = N_t.copy(),              # same time-slice
-            B_s    = B_t.copy(),
-            N_t    = N.copy(),
-            B_t    = B1.copy(),
+            N_s    = N_t, # .copy(),              # same time-slice
+            B_s    = B_t, #.copy(),
+            N_t    = N, #.copy(),
+            B_t    = B1, #.copy(),
             S      = S_target,
             sweeps = self.mh_sweeps
         )

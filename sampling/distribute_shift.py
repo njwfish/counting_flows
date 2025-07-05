@@ -3,73 +3,107 @@ import torch
 def get_proportional_weighted_dist(x0_hat_t):
     """
     Get a weighted distribution for sampling proportional to the values in x0_hat_t.
+    Column-wise normalization to match numpy implementation.
     """
-    total_sum = x0_hat_t.sum()
-    if total_sum == 0:
-        return torch.ones_like(x0_hat_t) / x0_hat_t.numel()
+    # Sum along axis 0 (rows) to get column sums - shape (d,)
+    dist_sum = x0_hat_t.sum(axis=0)
     
-    return x0_hat_t / total_sum
+    # Avoid division by zero by clipping to minimum value of 1
+    dist_sum_clipped = torch.clamp(dist_sum, min=1.0)
+    
+    # Divide each column by its sum
+    weighted_dist = x0_hat_t / dist_sum_clipped
+    
+    # Set columns with zero sum to uniform distribution (1/n_rows)
+    zero_sum_cols = (dist_sum == 0)
+    if zero_sum_cols.any():
+        n_rows = x0_hat_t.shape[0]
+        weighted_dist[:, zero_sum_cols] = 1.0 / n_rows
+    
+    # Convert to float64 for precision and renormalize column-wise
+    weighted_dist = weighted_dist.double()
+    weighted_dist = weighted_dist / weighted_dist.sum(axis=0)
+    
+    return weighted_dist
 
 def sample_pert(x0_hat_t, weighted_dist, mu_diff):
     """
     Sample a perturbation and apply it to x0_hat_t to match the target mean difference.
+    Fully vectorized implementation using scatter_add and multinomial sampling.
     """
     B, d = x0_hat_t.shape
-    total_diff = (mu_diff * B).sum().round().long()
-
-    if total_diff == 0:
+    device = x0_hat_t.device
+    
+    # Calculate count shift per column (like numpy version)
+    count_shift = torch.round(mu_diff * B)
+    
+    if torch.all(count_shift == 0):
         return x0_hat_t
-
-    pert = torch.zeros_like(x0_hat_t)
     
-    if total_diff > 0:
-        # Sample indices to increment
-        flat_dist = weighted_dist.flatten()
-        if flat_dist.sum() > 0:
-            indices = torch.multinomial(flat_dist, total_diff, replacement=True)
-            pert.view(-1).scatter_add_(0, indices, torch.ones_like(indices, dtype=pert.dtype))
-        else: # uniform sampling if weights are all zero
-            indices = torch.randint(0, B * d, (total_diff,), device=x0_hat_t.device)
-            pert.view(-1).scatter_add_(0, indices, torch.ones_like(indices, dtype=pert.dtype))
+    # Split into positive and negative shifts
+    pos_shift = torch.clamp(count_shift, min=0).long()
+    neg_shift = torch.clamp(-count_shift, min=0).long()
+    
+    samples = torch.zeros_like(x0_hat_t)
+    
+    # Handle positive shifts (adding counts) - fully vectorized
+    total_pos = pos_shift.sum()
+    if total_pos > 0:
+        # Create weighted flat probabilities
+        # Each column contributes pos_shift[j] copies of its probabilities
+        flat_probs = weighted_dist * pos_shift.float()
+        flat_probs = flat_probs.flatten()
+        
+        if flat_probs.sum() > 0:
+            # Sample all at once
+            indices = torch.multinomial(flat_probs, total_pos, replacement=True)
+            samples.view(-1).scatter_add_(0, indices, torch.ones_like(indices, dtype=samples.dtype))
+    
+    # Handle negative shifts (removing counts) - with constraints
+    neg_cols = torch.where(neg_shift > 0)[0]
+    for j in neg_cols:
+        c = neg_shift[j]
+        probs = weighted_dist[:, j]
+        max_count = x0_hat_t[:, j]
+        
+        if probs.sum() > 0:
+            # Rejection sampling for max count constraints
+            temp_samples = torch.zeros_like(max_count)
+            remaining = c
+            max_rejections = 100
             
-    elif total_diff < 0:
-        # Sample indices to decrement
-        flat_dist = weighted_dist.flatten()
-        if flat_dist.sum() > 0:
-            indices = torch.multinomial(flat_dist, -total_diff, replacement=True)
-            pert.view(-1).scatter_add_(0, indices, -torch.ones_like(indices, dtype=pert.dtype))
-        else: # uniform sampling if weights are all zero
-            indices = torch.randint(0, B * d, (-total_diff,), device=x0_hat_t.device)
-            pert.view(-1).scatter_add_(0, indices, -torch.ones_like(indices, dtype=pert.dtype))
-
-    x0_hat_t_pert = x0_hat_t + pert
+            for _ in range(max_rejections):
+                if remaining <= 0:
+                    break
+                    
+                # Sample indices
+                indices = torch.multinomial(probs, remaining, replacement=True)
+                temp_samples.scatter_add_(0, indices, torch.ones_like(indices, dtype=temp_samples.dtype))
+                
+                # Check max count violations
+                over_max = temp_samples > max_count
+                if over_max.any():
+                    # Calculate excess and adjust
+                    excess = (temp_samples[over_max] - max_count[over_max]).sum()
+                    temp_samples[over_max] = max_count[over_max]
+                    remaining = excess.long()
+                    
+                    # Update probabilities to avoid over-max elements
+                    probs = probs.clone()
+                    probs[over_max] = 0
+                    if probs.sum() > 0:
+                        probs = probs / probs.sum()
+                    else:
+                        break
+                else:
+                    break
+            
+            samples[:, j] = temp_samples
+    
+    # Apply the perturbation with correct signs
+    sampled_pert = x0_hat_t + torch.sign(count_shift) * samples
+    
     # Ensure non-negativity
-    x0_hat_t_pert = torch.clamp(x0_hat_t_pert, min=0)
+    sampled_pert = torch.clamp(sampled_pert, min=0)
     
-    # Adjust to match the exact total_diff
-    current_total = x0_hat_t_pert.sum()
-    target_total = x0_hat_t.sum() + total_diff
-    adjustment_diff = target_total - current_total
-    
-    while adjustment_diff != 0:
-        if adjustment_diff > 0:
-            # Need to add more counts
-            idx = torch.randint(0, B * d, (adjustment_diff.abs().long(),), device=x0_hat_t.device)
-            x0_hat_t_pert.view(-1).scatter_add_(0, idx, torch.ones_like(idx, dtype=pert.dtype))
-        else:
-            # Need to remove counts
-            non_zero_indices = (x0_hat_t_pert.view(-1) > 0).nonzero().squeeze()
-            if len(non_zero_indices) > 0:
-                idx_to_sample = non_zero_indices
-                num_to_sample = min(adjustment_diff.abs().long(), len(idx_to_sample))
-                if num_to_sample > 0:
-                   idx = idx_to_sample[torch.randint(0, len(idx_to_sample), (num_to_sample,))]
-                   x0_hat_t_pert.view(-1).scatter_add_(0, idx, -torch.ones_like(idx, dtype=pert.dtype))
-            
-        current_total = x0_hat_t_pert.sum()
-        new_adjustment_diff = target_total - current_total
-        if new_adjustment_diff == adjustment_diff: # break if no progress is made
-            break
-        adjustment_diff = new_adjustment_diff
-
-    return x0_hat_t_pert 
+    return sampled_pert 

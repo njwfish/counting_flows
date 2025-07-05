@@ -97,14 +97,6 @@ class EnergyScorePosterior(nn.Module):
         x0_hat = self.forward(x_t, M_t, z, t)
         return x0_hat.round().long()
 
-    def _pairwise_dist(self, a, b, eps=1e-6):
-        """
-        a: [n, d], b: [m, d] → [n, m] of √(||a_i - b_j||² + eps)
-        """
-        diff = a.unsqueeze(1) - b.unsqueeze(0)      # [n, m, d]
-        sq   = (diff * diff).sum(-1)                # [n, m]
-        return torch.sqrt(torch.clamp(sq, min=eps))
-
     def loss(self, x0_true, x_t, M_t, z, t):
         """
         Empirical energy-score (Distrib. Diffusion Models eq.14):
