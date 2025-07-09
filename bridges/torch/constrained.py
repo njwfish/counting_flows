@@ -1,10 +1,10 @@
 import torch
 from torch.distributions import Binomial
 import numpy as np
-from ..bridges.scheduling import make_time_spacing_schedule, make_lambda_schedule
-from ..sampling.hypergeom import hypergeometric
-from ..sampling.mean_constrained import mh_mean_constrained_update
-from ..sampling.distribute_shift import get_proportional_weighted_dist, sample_pert
+from .scheduling import make_time_spacing_schedule, make_lambda_schedule
+from ...sampling.hypergeom import hypergeometric
+from ...sampling.mean_constrained import mh_mean_constrained_update
+from ...sampling.distribute_shift import get_proportional_weighted_dist, sample_pert
 
 
 class SkellamMeanConstrainedBridge:
