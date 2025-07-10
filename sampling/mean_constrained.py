@@ -757,8 +757,11 @@ def constrained_multinomial_proposal_numpy(
     lower = np.maximum(0,  N_s + B_t - N_t)   # (B,d)
     upper = np.minimum(N_s, B_t)              # (B,d)
 
-    # 2) expected under hypergeom
-    B_s_exp = np.where(N_t==0, 0.0, N_s * (B_t/N_t))
+    # 2) expected under hypergeom, suppress divide by zero warnings
+    safe_div = np.divide(B_t, N_t, out=np.zeros_like(B_t, dtype=np.float64), where=N_t != 0)
+    B_s_exp = N_s * safe_div        
+    
+    #B_s_exp = np.where(N_t == 0, 0.0, N_s * (B_t / N_t))
 
     # 3) column residuals & sign
     col_sum = B_s.sum(axis=0)     # (d,)
