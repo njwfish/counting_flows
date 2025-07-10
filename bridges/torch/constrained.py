@@ -122,13 +122,7 @@ class SkellamMeanConstrainedBridge:
         diff_t = (x_t - x0)
         M_t    = (N_t - diff_t.abs()) // 2.0
 
-        return {
-            "x0"   : x0,
-            "x1"   : x1,
-            "x_t"  : x_t,
-            "t"    : t,          
-            "M_t"    : M_t
-        }
+        return x_t, M_t, t
 
     @torch.no_grad()
     def reverse_sampler(

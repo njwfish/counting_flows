@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from .scheduling import make_time_spacing_schedule, make_lambda_schedule
 from ...sampling.hypergeom import hypergeometric_numpy
-from ...sampling.mean_constrained import mh_mean_constrained_update
+from ...sampling.mean_constrained import mh_mean_constrained_update_numpy
 from ...sampling.distribute_shift_numpy import get_proportional_weighted_dist, sample_pert
 
 class SkellamMeanConstrainedBridge:
@@ -107,7 +107,9 @@ class SkellamMeanConstrainedBridge:
 
         N_t    = np.random.binomial(N, np.expand_dims(w_t, -1))  # (B,d)
         # births up to t
+        # time_start = time.time()
         B_t = hypergeometric_numpy(N, B1, N_t)
+        # print("Time taken to draw hypergeometric", time.time() - time_start)
 
         # ------------------------------------------------------------------
         #  Mean–constraint target  S_target
@@ -118,7 +120,7 @@ class SkellamMeanConstrainedBridge:
         S_target = (np.round((mu_t - mu0) * B).astype(np.int64) + N_t.sum(axis=0)) // 2
 
         # MH projection
-        B_t = mh_mean_constrained_update(
+        B_t = mh_mean_constrained_update_numpy(
             N_s    = N_t, # .copy(),              # same time-slice
             B_s    = B_t, #.copy(),
             N_t    = N, #.copy(),
@@ -137,7 +139,9 @@ class SkellamMeanConstrainedBridge:
             "x1"   : x1,
             "x_t"  : x_t,
             "t"    : t,          
-            "M_t"    : M_t
+            "M_t"  : M_t,
+            "N_t"  : N_t,
+            "B_t"  : B_t
         }
 
     def reverse_sampler(
@@ -239,7 +243,7 @@ class SkellamMeanConstrainedBridge:
 
             # births that survive the thinning  ~ Hypergeom
             B_s = np.zeros_like(B_t)
-            B_s[non_zero] = hypergeometric(
+            B_s[non_zero] = hypergeometric_numpy(
                 total_count   = N_t[non_zero],
                 success_count = B_t[non_zero],
                 num_draws     = N_s[non_zero]
@@ -253,7 +257,7 @@ class SkellamMeanConstrainedBridge:
             # print("target diff", np.max(x_t.mean(axis=0) + 2 * S_target / Bbatch - N_s.mean(axis=0) - mu_s), t_s, k)
             # print("x0", x0_hat_t.mean(axis=0),mu0, (x0_hat_t == 0).mean())
 
-            B_s = mh_mean_constrained_update( 
+            B_s = mh_mean_constrained_update_numpy( 
                 N_s = N_s.copy(),
                 B_s = B_s.copy(),
                 N_t = N_t.copy(),

@@ -1,8 +1,8 @@
 import torch
 from torch.distributions import Binomial
 import numpy as np
-from ..bridges.scheduling import make_time_spacing_schedule, make_lambda_schedule
-from ..sampling.hypergeom import hypergeometric
+from .scheduling import make_time_spacing_schedule, make_lambda_schedule
+from ...sampling.hypergeom import hypergeometric
 
 
 

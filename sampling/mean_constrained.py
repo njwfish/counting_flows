@@ -1,29 +1,24 @@
 import torch
+torch._dynamo.config.capture_scalar_outputs = True
+
 import numpy as np
 from scipy import special
 from typing import Union, Tuple, Optional
+import time
+
+import numpy as np
+from scipy import special
+
 
 
 def hypergeom_logpmf_torch(k, N, K, n):
     """Torch implementation of hypergeometric log PMF."""
+
     return (
         torch.lgamma(K+1) - torch.lgamma(k+1) - torch.lgamma(K-k+1)
-      + torch.lgamma(N-K+1) - torch.lgamma(n-k+1)
+      + torch.lgamma(N-K+1) - torch.lgamma(n-k+1) 
       - torch.lgamma(N-K-n+k+1)
       - (torch.lgamma(N+1) - torch.lgamma(n+1) - torch.lgamma(N-n+1))
-    )
-
-
-import numpy as np
-from scipy import special
-
-def _hypergeom_support_np(k, N, K, n):
-    """Boolean array – True where (k,N,K,n) lie in the hypergeometric support."""
-    return (
-        (k >= 0) & (k <= K) &          # successes drawn cannot exceed successes available
-        (k <= n) &                     # …or number drawn
-        (n <= N) & (K <= N) &          # parameter ordering
-        (n - k <= N - K)               # failures drawn cannot exceed failures available
     )
 
 def hypergeom_logpmf_numpy(k, N, K, n):
@@ -33,39 +28,14 @@ def hypergeom_logpmf_numpy(k, N, K, n):
     – Broadcasts all four arguments to a common shape.
     – Returns –inf outside the support instead of NaN / +/-inf.
     """
-    k, N, K, n = np.broadcast_arrays(k, N, K, n)        # shapes are now identical
-    logp        = np.full(k.shape, -np.inf, dtype=np.float64)
-
-    valid = _hypergeom_support_np(k, N, K, n)
-    if np.any(valid):
-        # Cast once to float64 for the gamma-log evaluations
-        kv = k[valid].astype(np.float64)
-        Nv = N[valid].astype(np.float64)
-        Kv = K[valid].astype(np.float64)
-        nv = n[valid].astype(np.float64)
-
-        logp[valid] = (
-            special.gammaln(Kv + 1)          - special.gammaln(kv + 1) - special.gammaln(Kv - kv + 1)
-          + special.gammaln(Nv - Kv + 1)     - special.gammaln(nv - kv + 1)
-          - special.gammaln(Nv - Kv - nv + kv + 1)
-          - (special.gammaln(Nv + 1) - special.gammaln(nv + 1) - special.gammaln(Nv - nv + 1))
-        )
+    logp = (
+        special.gammaln(K + 1)          - special.gammaln(k + 1) - special.gammaln(K - k + 1)
+        + special.gammaln(N - K + 1)     - special.gammaln(n - k + 1)
+        - special.gammaln(N - K - n + k + 1)
+        - (special.gammaln(N + 1) - special.gammaln(n + 1) - special.gammaln(N - n + 1))
+    )
 
     return logp
-
-def _feasible_bounds(a, N_s, N_t, B_t):
-    base_low   = a - N_s
-    base_high  = a + N_s
-    k_upper    = base_low + 2*B_t
-    k_lower    = base_low + 2*np.maximum(0, N_s - N_t + B_t)
-
-    lower = np.maximum(base_low,  k_lower)
-    upper = np.minimum(base_high, k_upper)
-
-    #  ❗️ real support: 0 ≤ k ≤ n and k ≤ K
-    lower = np.clip(lower, 0, N_s)
-    upper = np.clip(upper, 0, N_s)
-    return lower, upper
 
 
 def hypergeom_logpmf(k, N, K, n, backend='auto'):
@@ -198,7 +168,8 @@ def hypergeom_logpmf(k, N, K, n, backend='auto'):
     
     return result
 
-
+@torch.no_grad
+@torch.compile(dynamic=True)
 def mh_mean_constrained_update_torch(
     N_t:     torch.LongTensor,    # (B,d) total population at time-t
     B_t:     torch.LongTensor,    # (B,d) total successes at time-t
@@ -238,8 +209,12 @@ def mh_mean_constrained_update_torch(
         cols = torch.nonzero(good).squeeze(1)
         n_good = len(cols)
 
-        r_inc = torch.randint(high=cnt_inc[cols].max().item(), size=(n_good,), device=device) % cnt_inc[cols]
-        r_dec = torch.randint(high=cnt_dec[cols].max().item(), size=(n_good,), device=device) % cnt_dec[cols]
+        r_inc = torch.randint(
+            high=cnt_inc[cols].max().item(), size=(n_good,), device=device
+        ) % cnt_inc[cols]
+        r_dec = torch.randint(
+            high=cnt_dec[cols].max().item(), size=(n_good,), device=device
+        ) % cnt_dec[cols]
 
         sub_inc = can_inc[:, cols]
         sub_dec = can_dec[:, cols]
@@ -303,6 +278,8 @@ def mh_mean_constrained_update_torch(
         ratio = torch.minimum(ratio, torch.tensor(1.0, device=device))
 
         accept = torch.rand(len(ratio), device=device) < ratio
+
+        # print("torch", time.time() - time_start, "logp_curr", logp_curr.mean(),"logp_prop", logp_prop.mean(), "ratio", ratio.mean(), "accept", accept.float().mean())
         if not accept.any():
             continue
 
@@ -316,65 +293,6 @@ def mh_mean_constrained_update_torch(
         B_s.index_put_((q_acc, j_acc), B_s[q_acc, j_acc] - 1)
 
     return B_s
-
-
-import numpy as np
-from scipy.special import gammaln
-
-def _log_hypergeom(k, N, K, n):
-    """
-    Vectorised log-pmf for Hypergeom(N, K, n) evaluated at k.
-    """
-    return (
-        gammaln(K + 1) - gammaln(k + 1) - gammaln(K - k + 1)
-        + gammaln(N - K + 1) - gammaln(n - k + 1) - gammaln(N - K - n + k + 1)
-        - gammaln(N + 1) + gammaln(n + 1) + gammaln(N - n + 1)
-    )
-
-
-def check_feasibility(B_s, N_t, B_t, N_s, S):
-    """
-    Returns a dict of boolean masks (and counts) for:
-      • column‐sum mismatches
-      • out‐of‐bounds entries
-      • hypergeom‐support violations
-    """
-    B, d = B_s.shape
-
-    # 1) Column‐sum mismatch
-    col_sums   = B_s.sum(axis=0)
-    sum_ok     = (col_sums == S)
-    sum_diff   = col_sums - S
-
-    # 2) Entry‐wise bounds
-    lower = np.maximum(0, N_s + B_t - N_t)
-    upper = np.minimum(N_s, B_t)
-    too_small  = (B_s < lower)
-    too_large  = (B_s > upper)
-
-    # 3) Hypergeom support: B_s[i,j] must also satisfy
-    #                   0 <= B_s <= B_t and 0 <= N_s - B_s <= N_t - B_t
-    #    (equivalently:  max(0, N_s+B_t-N_t) <= B_s <= min(N_s, B_t) )
-    hg_lower = lower
-    hg_upper = upper
-    hg_viol   = (B_s < hg_lower) | (B_s > hg_upper)
-
-    # Bundle up
-    report = {
-      'sum_mismatch_mask': ~sum_ok,        # which columns
-      'sum_diff':          sum_diff,       # by how much
-      'too_small_mask':    too_small,      # entry‐wise
-      'too_large_mask':    too_large,
-      'hg_viol_mask':      hg_viol,        # entry‐wise
-      'counts': {
-        'n_cols_bad_sum':   int((~sum_ok).sum()),
-        'n_entries_small':  int(too_small.sum()),
-        'n_entries_large':  int(too_large.sum()),
-        'n_entries_hg_viol':int(hg_viol.sum()),
-      }
-    }
-    return report
-
 
 def mh_mean_constrained_update_numpy(
     N_t: np.ndarray,     # (B,d) total population at time-t
@@ -397,7 +315,7 @@ def mh_mean_constrained_update_numpy(
     B_s = B_s.copy()
     lower = np.maximum(0, N_s + B_t - N_t)   # min successes possible
     upper = np.minimum(N_s, B_t)            # max successes possible
-
+    
     # 0) quick projections to hit ∑_i B_s[i,j] = S_target[j]
     for _ in range(max_projections):
         B_s, _ = constrained_multinomial_proposal_numpy(
@@ -406,13 +324,9 @@ def mh_mean_constrained_update_numpy(
         # print("B_s", B_s.sum(axis=0), S)
         if np.all(B_s.sum(axis=0) == S):
             break
-    # B_s, _ = constrained_multinomial_proposal_numpy(N_t, B_t, N_s, B_s, S, override_support=True)
-    # print("B_s", B_s.sum(axis=0), S)
 
     # 1) MH sweeps via ±1 exchanges in each column
     rng  = np.random.default_rng()
-    cols = np.arange(d)
-
 
     for _ in range(sweeps):
         # 1) feasibility masks
@@ -513,7 +427,7 @@ def mh_mean_constrained_update_numpy(
 
         accept = rng.random(len(ratio)) < ratio
 
-        # print("numpy", "logp_curr", logp_curr.mean(),"logp_prop", logp_prop.mean(), "ratio", ratio.mean(), "accept", accept.mean())
+        print("numpy", time.time() - time_start, "logp_curr", logp_curr.mean(),"logp_prop", logp_prop.mean(), "ratio", ratio.mean(), "accept", accept.mean())
         if not accept.any():
             continue
 
@@ -661,7 +575,9 @@ def mh_mean_constrained_update(
     return result
 
 
-@torch.compile
+# no grad then compile should be fastest
+@torch.no_grad
+@torch.compile(dynamic=True)
 def constrained_multinomial_proposal_torch(
     N_t: torch.LongTensor,     # (B,d)
     B_t: torch.LongTensor,     # (B,d)
@@ -680,7 +596,7 @@ def constrained_multinomial_proposal_torch(
 
     # 2) expected under hypergeom
     N_t_float = N_t.float()
-    B_s_exp = torch.where(N_t_float==0, 0.0, N_s.float() * (B_t.float()/N_t_float))
+    B_s_exp = torch.where(N_t==0, 0.0, N_s.float() * (B_t.float()/N_t_float))
 
     # 3) column residuals & sign
     col_sum = B_s.sum(dim=0)     # (d,)
@@ -737,11 +653,7 @@ def constrained_multinomial_proposal_torch(
     if not override_support:
         B_prop = torch.max(torch.min(B_prop, upper), lower)
 
-    return B_prop, sgn
-
-
-import numpy as np
-from typing import Tuple
+    return B_prop, delta
 
 def constrained_multinomial_proposal_numpy(
     N_t: np.ndarray,     # (B,d)
@@ -788,7 +700,7 @@ def constrained_multinomial_proposal_numpy(
     if not override_support:
         B_prop = np.clip(B_prop, lower, upper)
 
-    return B_prop, sgn
+    return B_prop, delta
 
 
 def constrained_multinomial_proposal(
