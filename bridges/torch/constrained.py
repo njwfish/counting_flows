@@ -2,8 +2,8 @@ import torch
 from torch.distributions import Binomial
 import numpy as np
 from .scheduling import make_time_spacing_schedule, make_lambda_schedule
-from ...sampling.hypergeom import hypergeometric
-from ...sampling.mean_constrained import mh_mean_constrained_update
+from ...sampling.hypergeom import hypergeometric_torch
+from ...sampling.mean_constrained import mh_mean_constrained_update_torch
 from ...sampling.distribute_shift import get_proportional_weighted_dist, sample_pert
 
 
@@ -96,7 +96,7 @@ class SkellamMeanConstrainedBridge:
         N_t    = torch.binomial(N.float(), w_t.unsqueeze(-1)).long()  # (B,d)
 
         # births up to t
-        B_t = hypergeometric(N, B1, N_t)
+        B_t = hypergeometric_torch(N, B1, N_t)
 
         # ------------------------------------------------------------------
         #  Mean–constraint target  S_target
@@ -107,14 +107,13 @@ class SkellamMeanConstrainedBridge:
         S_target = ((mu_t - mu0) * B).round().long() + N_t.sum(dim=0) // 2
 
         # MH projection
-        B_t = mh_mean_constrained_update(
+        B_t = mh_mean_constrained_update_torch(
             N_s    = N_t.clone(),              # same time-slice
             B_s    = B_t.clone(),
             N_t    = N.clone(),
             B_t    = B1.clone(),
             S      = S_target,
-            sweeps = self.mh_sweeps,
-            backend='torch'
+            sweeps = self.mh_sweeps
         )
         x_t = x1 - 2 * (B1 - B_t) + (N - N_t)
 
@@ -207,7 +206,7 @@ class SkellamMeanConstrainedBridge:
 
             # births that survive the thinning  ~ Hypergeom
             B_s = torch.zeros_like(B_t)
-            B_s[non_zero] = hypergeometric(
+            B_s[non_zero] = hypergeometric_torch(
                 total_count   = N_t[non_zero],
                 success_count = B_t[non_zero],
                 num_draws     = N_s[non_zero]
@@ -218,7 +217,7 @@ class SkellamMeanConstrainedBridge:
             mu_s  = (1. - t_s) * mu0 + t_s * mu1          # (d,)
             S_k   = ((mu_s - (x0_hat_t.float().mean(dim=0))) * Bbatch).round().long() + N_s.sum(dim=0) // 2       # desired row-sum per sample
 
-            B_s = mh_mean_constrained_update(
+            B_s = mh_mean_constrained_update_torch(
                 N_s    = N_s.clone(),
                 B_s    = B_s.clone(),
                 N_t    = N_t.clone(),

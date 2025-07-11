@@ -9,6 +9,8 @@ import time
 import numpy as np
 from scipy import special
 
+from .multinomial import multinomial
+
 
 
 def hypergeom_logpmf_torch(k, N, K, n):
@@ -169,7 +171,7 @@ def hypergeom_logpmf(k, N, K, n, backend='auto'):
     return result
 
 @torch.no_grad
-@torch.compile(dynamic=True)
+@torch.compile
 def mh_mean_constrained_update_torch(
     N_t:     torch.LongTensor,    # (B,d) total population at time-t
     B_t:     torch.LongTensor,    # (B,d) total successes at time-t
@@ -443,7 +445,7 @@ def mh_mean_constrained_update_numpy(
     return B_s
 
 
-@torch.no_grad()
+@torch.no_grad
 def mh_mean_constrained_update(
     N_t:     torch.LongTensor,    # (B,d)
     B_t:     torch.LongTensor,    # (B,d)
@@ -577,7 +579,7 @@ def mh_mean_constrained_update(
 
 # no grad then compile should be fastest
 @torch.no_grad
-@torch.compile(dynamic=True)
+@torch.compile
 def constrained_multinomial_proposal_torch(
     N_t: torch.LongTensor,     # (B,d)
     B_t: torch.LongTensor,     # (B,d)
@@ -610,42 +612,10 @@ def constrained_multinomial_proposal_torch(
     w       = torch.logaddexp(torch.zeros_like(diff), diff) # (B,d)
     probs   = w / w.sum(dim=0, keepdim=True)      # (B,d)
 
-    # 5) Scatter-add multinomial sampling
-    delta = torch.zeros_like(B_s)
-    
-    max_count = Rabs.max().item()
-    if max_count > 0:
-        # Step 1: Sample max_count times for ALL columns
-        probs_T = probs.T  # (d, B)
-        
-        # Sample indices - this gives us which row (batch element) each sample goes to
-        sample_indices = torch.multinomial(
-            probs_T, 
-            num_samples=max_count, 
-            replacement=True
-        )  # (d, max_count)
-        
-        # Step 2: Create mask for valid samples per column
-        count_range = torch.arange(max_count, device=device).unsqueeze(0)  # (1, max_count)
-        valid_mask = count_range < Rabs.unsqueeze(1)  # (d, max_count)
-        
-        # Step 3: Use scatter_add like torch.distributions.Multinomial
-        # Get valid sample indices and their corresponding column indices
-        valid_samples = sample_indices[valid_mask]  # (num_valid_samples,)
-        
-        # Get column indices for each valid sample
-        col_indices = torch.arange(d, device=device).unsqueeze(1).expand(-1, max_count)
-        valid_col_indices = col_indices[valid_mask]  # (num_valid_samples,)
-        
-        # Create flat indices into the (B, d) delta tensor
-        flat_indices = valid_samples * d + valid_col_indices  # (num_valid_samples,)
-        
-        # Create flat delta tensor and scatter_add
-        flat_delta = torch.zeros(B * d, dtype=torch.long, device=device)
-        flat_delta.scatter_add_(0, flat_indices, torch.ones_like(flat_indices))
-        
-        # Reshape back to (B, d)
-        delta = flat_delta.view(B, d)
+    # 5) custom vectorizedmultinomial sampling
+    p_mat = probs.T  # (d, B)
+    draws = multinomial(Rabs, p_mat)
+    delta = draws.T
 
     # 6) raw proposal and clip to true support
     B_prop = B_s + sgn.unsqueeze(0) * delta             # (B,d)
