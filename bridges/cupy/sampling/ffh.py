@@ -105,7 +105,7 @@ void ffh_mh_seq_flat(
         }
     }
 
-    // ----- Before MH: build donor (dec) & receiver (inc) lists -----
+    // ----- Before MH: build donor (dec) and receiver (inc) lists -----
     int incList[128], decList[128];
     int incN = 0, decN = 0;
 
@@ -117,7 +117,7 @@ void ffh_mh_seq_flat(
         if (xi < hi) incList[incN++] = i;
     }
 
-    // ----- 3) MH token‐swap using only valid bins -----
+    // ----- 3) MH token-swap using only valid bins -----
     for (int s = 0; s < sweeps; ++s) {
         if (decN == 0 || incN == 0) break;  // nothing to swap
 
@@ -141,7 +141,7 @@ void ffh_mh_seq_flat(
         int xi2 = xi - 1;
         int xj2 = xj + 1;
 
-        // compute log‐ratio
+        // compute log-ratio
         float lr = logP(wi,bi,ki,xi2)
                 + logP(wj,bj,kj,xj2)
                 - logP(wi,bi,ki, xi )
@@ -161,7 +161,7 @@ void ffh_mh_seq_flat(
                 // no longer can donate
                 decList[di] = decList[--decN];
             }
-            // if was at hi_i, now can receive → add to incList
+            // if was at hi_i, now can receive -> add to incList
             if (xi  == hi_i) {
                 incList[incN++] = i;
             }
@@ -171,7 +171,7 @@ void ffh_mh_seq_flat(
                 // no longer can receive
                 incList[ri] = incList[--incN];
             }
-            // if was at lo_j, now can donate → add to decList
+            // if was at lo_j, now can donate -> add to decList
             if (xj  == lo_j) {
                 decList[decN++] = j;
             }
