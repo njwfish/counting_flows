@@ -6,24 +6,9 @@ import math
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import stats
-
+from ..utils import maybe_compile
 # Enable JIT compilation for better performance
-try:
-    torch._dynamo.config.optimize_ddp = False
-    torch._dynamo.config.suppress_errors = True
-    USE_COMPILE = True
-except:
-    USE_COMPILE = False
 
-# Try to use torch.compile if available (PyTorch 2.0+)
-def maybe_compile(func):
-    """Decorator to optionally compile functions for better performance."""
-    if USE_COMPILE and hasattr(torch, 'compile'):
-        try:
-            return torch.compile(func, mode='max-autotune')
-        except:
-            pass
-    return func
 
 def hypergeometric_torch(total_count, success_count, num_draws):
     """

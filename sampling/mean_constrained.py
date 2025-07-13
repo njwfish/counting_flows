@@ -11,7 +11,7 @@ from scipy import special
 
 from .multinomial import multinomial
 
-
+from ..utils import maybe_compile
 
 def hypergeom_logpmf_torch(k, N, K, n):
     """Torch implementation of hypergeometric log PMF."""
@@ -171,7 +171,7 @@ def hypergeom_logpmf(k, N, K, n, backend='auto'):
     return result
 
 @torch.no_grad
-@torch.compile
+@maybe_compile
 def mh_mean_constrained_update_torch(
     N_t:     torch.LongTensor,    # (B,d) total population at time-t
     B_t:     torch.LongTensor,    # (B,d) total successes at time-t
