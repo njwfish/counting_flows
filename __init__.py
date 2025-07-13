@@ -1,29 +1,47 @@
 """
-Count-based Flow Matching
+Counting Flows: Count-based Flow Matching with GPU Bridges
 
-A unified framework for discrete flow matching on count data using 
-Poisson and Negative Binomial bridges.
+A clean, Hydra-based implementation of count-based flow matching using GPU-accelerated
+bridges for efficient training and sampling.
+
+Main Components:
+- GPU Bridges (CuPy-based): Fast bridge operations on GPU
+- Simplified Datasets: Mixture of Poissons with sampled parameters
+- Hydra Configuration: Structured configuration management
+- Clean Training Loop: Streamlined training with proper GPU integration
+
+Usage:
+    from counting_flows import main_hydra
+    
+    # Or run directly:
+    python run.py
+    python run.py --config-name=experiment_quick
 """
 
-from counting_flows.models import EnergyScorePosterior
-from counting_flows.datasets import PoissonDataset, BetaBinomialDataset, create_dataloader, InfiniteDataLoader
-from counting_flows.bridges.numpy.skellam import SkellamBridge
-from counting_flows.bridges.numpy.constrained import SkellamMeanConstrainedBridge
-from counting_flows.training import train_model, create_training_dataloader
-# from counting_flows.bridges.torch.scheduling import make_time_spacing_schedule
+from .models import EnergyScorePosterior
+from .datasets import PoissonMixtureDataset
+from .training import CountFlowTrainer
 
-__version__ = "0.1.0"
-__author__ = "Your Name"
+# Version info
+__version__ = "2.0.0"
+__author__ = "Counting Flows Team"
+__description__ = "Count-based Flow Matching with GPU Bridges"
 
+# Main components for easy import
 __all__ = [
-    "EnergyScorePosterior", 
-    "PoissonDataset",
-    "BetaBinomialDataset",
-    "SkellamBridge",
-    "SkellamMeanConstrainedBridge",
-    "create_dataloader",
-    "InfiniteDataLoader",
-    "train_model",
-    "create_training_dataloader",
-    "make_time_spacing_schedule"
-] 
+    # Core components
+    "EnergyScorePosterior",
+    "PoissonMixtureDataset", 
+    "CountFlowTrainer",
+    
+    # Main function
+    "main_hydra",
+]
+
+# Optional import of main function
+try:
+    from .main_hydra import main as main_hydra
+    __all__.append("main_hydra")
+except ImportError:
+    # Hydra might not be available in all contexts
+    pass 

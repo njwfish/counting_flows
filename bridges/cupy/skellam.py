@@ -17,12 +17,13 @@ class SkellamBridge:
         homogeneous_time: bool = False,
         **schedule_kwargs,
     ):
-        self.n_steps        = n_steps
-        self.m_sampler      = m_sampler
-        self.schedule_type  = schedule_type
-        self.time_points    = cp.linspace(0, 1, n_steps + 1)
-        self.weights        = make_weight_schedule(
-            self.time_points, schedule_type, **schedule_kwargs
+        self.n_steps          = n_steps
+        self.m_sampler        = m_sampler
+        self.schedule_type    = schedule_type
+        self.time_points      = cp.linspace(0, 1, n_steps + 1)
+        self.homogeneous_time = homogeneous_time
+        self.weights          = make_weight_schedule(
+            n_steps, schedule_type, **schedule_kwargs
         )
 
     def __call__(self, x_0, x_1, t_target=None):
@@ -39,7 +40,7 @@ class SkellamBridge:
         if t_target is not None:
             # find closest time point
             time_diffs = cp.abs(self.time_points - t_target)
-            k = cp.argmin(time_diffs).item()
+            k = cp.argmin(time_diffs)
             k = cp.broadcast_to(k, (b,))
 
         elif self.homogeneous_time:
@@ -48,7 +49,7 @@ class SkellamBridge:
         else:
             k = cp.random.randint(1, self.n_steps + 1, (b,))
             
-        t     = self.time_points[k]
+        t     = self.time_points[k].reshape(-1, 1)
         w_t   = self.weights[k]
         
         N_t = cp.random.binomial(N_1, cp.expand_dims(w_t, -1), dtype=cp.int32)
@@ -63,7 +64,7 @@ class SkellamBridge:
             dtype=cp.int32
         )
 
-        x_t = x1 - 2 * (B_1 - B_t) + (N_1 - N_t)
+        x_t = x_1 - 2 * (B_1 - B_t) + (N_1 - N_t)
 
         diff_t = cp.abs(x_t - x_0)
         M_t    = ((N_t - diff_t) >> 1)

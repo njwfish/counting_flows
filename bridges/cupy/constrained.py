@@ -26,9 +26,9 @@ class SkellamMeanConstrainedBridge:
         self.n_steps        = n_steps
         self.m_sampler      = m_sampler
         self.schedule_type  = schedule_type
-        self.time_points    = cp.linspace(0, 1, n_steps + 1)
+        self.time_points    = cp.linspace(0, 1, num=n_steps + 1)
         self.weights        = make_weight_schedule(
-            self.time_points, schedule_type, **schedule_kwargs
+            n_steps, schedule_type, **schedule_kwargs
         )
         self.mh_sweeps      = mh_sweeps
 
@@ -55,7 +55,7 @@ class SkellamMeanConstrainedBridge:
             k = cp.random.randint(0, self.n_steps + 1)
             k = cp.broadcast_to(k, (b,))
 
-        t      = self.time_points[k]                            # (b,)
+        t      = self.time_points[k].reshape(-1, 1)                            # (b,)
         w_t    = self.weights[k]                                # (b,)
 
         Nt_tot = (w_t * N_1.sum(axis=0)).round().astype(cp.int32)
