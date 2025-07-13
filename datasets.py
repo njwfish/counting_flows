@@ -116,8 +116,9 @@ class PoissonMixtureDataset(Dataset):
     
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         """Return pre-computed sample"""
+        target_idx = np.random.randint(0, self.size)
         return {
             'x_0': self.x0_data[idx],
-            'x_1': self.x1_data[idx]
+            'x_1': self.x1_data[target_idx]
         }
  

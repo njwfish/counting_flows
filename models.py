@@ -1,15 +1,3 @@
-"""
-Neural Network Models for Count-based Flow Matching
-
-Provides different neural architectures for predicting count distributions:
-- NBPosterior: Negative Binomial parameters (r, p)
-- BetaBinomialPosterior: Beta-Binomial parameters (n, alpha, beta)  
-- MLERegressor: Direct count prediction via log(1 + x₀)
-- ZeroInflatedPoissonPosterior: Zero-Inflated Poisson parameters (λ, π)
-- IQNPosterior: Implicit Quantile Networks for count prediction
-- MMDPosterior: Maximum Mean Discrepancy with L2 kernel
-"""
-
 import torch
 import torch.nn as nn
 
@@ -53,13 +41,6 @@ class EnergyScorePosterior(nn.Module):
             nn.SELU(),
             nn.Linear(hidden, x_dim),
         )
-
-    @property
-    def output_dim(self):
-        return self.x_dim
-
-    def process_output(self, h):
-        return h
 
     def forward(self, x_t, M_t, t, z=None, noise=None):
         """
@@ -135,4 +116,4 @@ class EnergyScorePosterior(nn.Module):
         mean_pd   = pdists.mean(dim=1)                                # [n]
         term_int  = (λ / 2.0) * mean_pd                               # [n]
 
-        return (term_conf - term_int).mean(), x0_preds.mean(dim=1)
+        return (term_conf - term_int).mean(), x0_preds

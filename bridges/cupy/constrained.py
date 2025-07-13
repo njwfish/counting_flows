@@ -50,10 +50,10 @@ class SkellamMeanConstrainedBridge:
         if t_target is not None:
             # Find closest grid point to target time
             time_diffs = cp.abs(self.time_points - t_target)
-            k = cp.argmin(time_diffs).item()
+            k = cp.argmin(time_diffs)
             k = cp.broadcast_to(k, (b,))
         else:
-            k = cp.random.randint(0, self.n_steps + 1)
+            k = cp.random.randint(1, self.n_steps + 1)
             k = cp.broadcast_to(k, (b,))
 
         t      = self.time_points[k].reshape(-1, 1)                            # (b,)
@@ -82,7 +82,7 @@ class SkellamMeanConstrainedBridge:
         return_trajectory: bool = False,
         return_x_hat:     bool = False,
         return_M:         bool = False,
-        guidance_x0:      cp.ndarray = None,
+        guidance_x_0:      cp.ndarray = None,
         guidance_schedule: cp.ndarray = None,
     ):
         """
@@ -95,9 +95,10 @@ class SkellamMeanConstrainedBridge:
             { ‖x‖₁  =  round(B · μ_k) }.
         """
         b, d = x_1.shape
-        x_1 = x_1.astype(cp.int32)
-        if guidance_x0 is not None:
-            guidance_x0 = guidance_x0.astype(cp.int32)
+        x_1 = cp.from_dlpack(x_1).round().astype(cp.int32)
+        mu_0 = cp.from_dlpack(mu_0)
+        if guidance_x_0 is not None:
+            guidance_x_0 = cp.from_dlpack(guidance_x_0).round().astype(cp.int32)
 
         mu_1 = x_1.mean(axis=0)
         S_0 = (mu_0 * b).round().astype(cp.int32)
@@ -108,9 +109,10 @@ class SkellamMeanConstrainedBridge:
                     M_t = self.m_sampler(x_t)
 
             t = cp.broadcast_to(self.time_points[k], (b, 1))
+            print(k, t, x_t, M_t)
             x_t_dl, M_t_dl, t_dl = dlpack_backend(x_t, M_t, t, backend=self.backend, dtype="float32")
             x0_hat_t = model.sample(x_t_dl, M_t_dl, t_dl, **z)
-            x0_hat_t = dlpack_backend(x0_hat_t, backend='cupy', dtype="int32")
+            x0_hat_t = cp.from_dlpack(x0_hat_t)
 
             if guidance_x_0 is not None:
                 x0_hat_t =  guidance_schedule[k] * guidance_x_0 + (1 - guidance_schedule[k]) * x0_hat_t

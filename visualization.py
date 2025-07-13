@@ -11,6 +11,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from typing import List, Optional, Dict, Any, Tuple
 import logging
+import seaborn as sns
+import pandas as pd
 
 def plot_loss_curve(losses: List[float], title: str = "Training Loss") -> plt.Figure:
     """Plot the training loss curve"""
@@ -104,12 +106,14 @@ def plot_generation_analysis(x0_samples: torch.Tensor, x0_target: torch.Tensor,
     return fig
 
 
-def plot_full_reverse_trajectories(trajectory: List[torch.Tensor], 
-                                 x_hat_trajectory: List[torch.Tensor],
-                                 M_trajectory: List[torch.Tensor], 
-                                 x0_target: torch.Tensor, 
-                                 x1_batch: torch.Tensor, 
-                                 title: str = "Full Reverse Trajectories") -> plt.Figure:
+def plot_full_reverse_trajectories(
+    trajectory: np.ndarray, 
+    x_hat_trajectory: np.ndarray,
+    M_trajectory: np.ndarray, 
+    x0_target: np.ndarray, 
+    x1_batch: np.ndarray, 
+    title: str = "Full Reverse Trajectories"
+) -> plt.Figure:
     """
     Plot reverse trajectories for all samples with elegant handling of large datasets.
     
@@ -125,16 +129,10 @@ def plot_full_reverse_trajectories(trajectory: List[torch.Tensor],
     fig, axes = plt.subplots(3, 4, figsize=(20, 15))
     fig.suptitle(title, fontsize=16)
     
-    # Convert trajectory data to numpy arrays
-    # trajectory: list of [B, d] tensors -> [K+1, B, d] array
-    traj_array = np.array([step.cpu().numpy() for step in trajectory])  # [K+1, B, d]
-    x_hat_array = np.array([step.cpu().numpy() for step in x_hat_trajectory])  # [K, B, d]
-    M_array = np.array([step.cpu().numpy() for step in M_trajectory])  # [K, B, d]
-    
     B, d = x0_target.shape
-    time_steps = np.linspace(1.0, 0.0, len(traj_array))  # Reverse time from 1 to 0
-    x_hat_time_steps = np.linspace(1.0, 0.0, len(x_hat_array))  # Match x_hat_array length
-    M_time_steps = np.linspace(1.0, 0.0, len(M_array))  # Match M_array length
+    time_steps = np.linspace(1.0, 0.0, len(trajectory))  # Reverse time from 1 to 0
+    x_hat_time_steps = np.linspace(1.0, 0.0, len(x_hat_trajectory))  # Match x_hat_array length
+    M_time_steps = np.linspace(1.0, 0.0, len(M_trajectory))  # Match M_array length
     
     # Plot first 4 dimensions
     n_dims_to_plot = min(4, d)
@@ -145,20 +143,20 @@ def plot_full_reverse_trajectories(trajectory: List[torch.Tensor],
         
         # Plot all trajectories with low alpha for density visualization
         for b in range(min(B, 1000)):  # Limit to 1000 trajectories for performance
-            alpha = 0.05 if B > 100 else 0.1
-            ax.plot(time_steps, traj_array[:, b, dim], 'b-', alpha=alpha, linewidth=0.5)
+            alpha = 0.1 if B > 100 else 0.5
+            ax.plot(time_steps, trajectory[:, b, dim], 'b-', alpha=alpha, linewidth=0.5)
         
         # Plot percentiles for summary statistics
-        traj_percentiles = np.percentile(traj_array[:, :, dim], [10, 25, 50, 75, 90], axis=1)
+        traj_percentiles = np.percentile(trajectory[:, :, dim], [10, 25, 50, 75, 90], axis=1)
         ax.plot(time_steps, traj_percentiles[2], 'r-', linewidth=2, label='Median x_t')
         ax.fill_between(time_steps, traj_percentiles[1], traj_percentiles[3], 
-                       alpha=0.4, color='red', label='25-75%')
+                       alpha=0.4, color='red', label='25-75%') 
         ax.fill_between(time_steps, traj_percentiles[0], traj_percentiles[4], 
                        alpha=0.3, color='red', label='10-90%')
         
         # Plot target mean as reference
-        target_mean = x0_target[:, dim].float().mean().cpu().numpy()
-        x1_mean = x1_batch[:, dim].float().mean().cpu().numpy()
+        target_mean = x0_target[:, dim].mean()
+        x1_mean = x1_batch[:, dim].mean()
         ax.axhline(y=target_mean, color='green', linestyle='--', linewidth=2, label='Target x₀ mean')
         ax.axhline(y=x1_mean, color='orange', linestyle='--', linewidth=2, label='x₁ mean')
         
@@ -176,11 +174,11 @@ def plot_full_reverse_trajectories(trajectory: List[torch.Tensor],
         
         # Plot all x̂₀ predictions with low alpha
         for b in range(min(B, 1000)):  # Limit to 1000 trajectories for performance
-            alpha = 0.05 if B > 100 else 0.1
-            ax.plot(x_hat_time_steps, x_hat_array[:, b, dim], 'purple', alpha=alpha, linewidth=0.5)
+            alpha = 0.1 if B > 100 else 0.5
+            ax.plot(x_hat_time_steps, x_hat_trajectory[:, b, dim], 'purple', alpha=alpha, linewidth=0.5)
         
         # Plot percentiles for x̂₀ predictions
-        xhat_percentiles = np.percentile(x_hat_array[:, :, dim], [10, 25, 50, 75, 90], axis=1)
+        xhat_percentiles = np.percentile(x_hat_trajectory[:, :, dim], [10, 25, 50, 75, 90], axis=1)
         ax.plot(x_hat_time_steps, xhat_percentiles[2], 'purple', linewidth=2, label='Median x̂₀')
         ax.fill_between(x_hat_time_steps, xhat_percentiles[1], xhat_percentiles[3], 
                        alpha=0.4, color='purple', label='25-75%')
@@ -188,7 +186,7 @@ def plot_full_reverse_trajectories(trajectory: List[torch.Tensor],
                        alpha=0.3, color='purple', label='10-90%')
         
         # Plot target mean as reference
-        target_mean = x0_target[:, dim].float().mean().cpu().numpy()
+        target_mean = x0_target[:, dim].mean()
         ax.axhline(y=target_mean, color='green', linestyle='--', linewidth=2, label='Target x₀ mean')
         
         ax.set_title(f'x̂₀ Predictions - Dimension {dim}')
@@ -205,11 +203,11 @@ def plot_full_reverse_trajectories(trajectory: List[torch.Tensor],
         
         # Plot all M_t trajectories with low alpha
         for b in range(min(B, 1000)):  # Limit to 1000 trajectories for performance
-            alpha = 0.05 if B > 100 else 0.1
-            ax.plot(M_time_steps, M_array[:, b, dim], 'orange', alpha=alpha, linewidth=0.5)
+            alpha = 0.5 if B > 100 else 0.5
+            ax.plot(M_time_steps, M_trajectory[:, b, dim], 'orange', alpha=alpha, linewidth=0.5)
         
         # Plot percentiles for M_t
-        M_percentiles = np.percentile(M_array[:, :, dim], [10, 25, 50, 75, 90], axis=1)
+        M_percentiles = np.percentile(M_trajectory[:, :, dim], [10, 25, 50, 75, 90], axis=1)
         ax.plot(M_time_steps, M_percentiles[2], 'orange', linewidth=2, label='Median M_t')
         ax.fill_between(M_time_steps, M_percentiles[1], M_percentiles[3], 
                        alpha=0.4, color='orange', label='25-75%')
@@ -260,20 +258,15 @@ def plot_bridge_marginals(x0_batch: torch.Tensor, x1_batch: torch.Tensor,
     
     for t_val in times:
         # Sample from bridge at this time point
-        x0_sample = x0_batch
-        x1_sample = x1_batch
+        x0_sample = x0_batch.cuda()
+        x1_sample = x1_batch.cuda()
         
-        # Convert to CuPy
-        x0_cp = cp.array(x0_sample)
-        x1_cp = cp.array(x1_sample)
+        # Sample from bridge 
+        x_t, M_t, _ = bridge(x0_sample, x1_sample, t_target=t_val)
         
-        # Sample from bridge
-        print(x0_cp, x1_cp, t_val)
-        x_t_cp, M_t_cp, _ = bridge(x0_cp, x1_cp, t_target=cp.array(t_val))
-        
-        # Convert back to numpy
-        x_t = cp.asnumpy(x_t_cp)
-        M_t = cp.asnumpy(M_t_cp)
+        # Convert CuPy arrays to numpy
+        x_t = x_t.cpu().numpy()
+        M_t = M_t.cpu().numpy()
         
         all_x_t_samples.append(x_t)
         all_M_samples.append(M_t)
@@ -296,9 +289,8 @@ def plot_bridge_marginals(x0_batch: torch.Tensor, x1_batch: torch.Tensor,
         ax.plot(times, traj_median, 'r-', linewidth=3, label='Median x_t')
         
         # Plot target mean as reference
-        target_mean = x0_batch[:, dim].cpu().numpy().mean() # .get().astype(np.float32).mean()
-        x1_mean = x1_batch[:, dim].cpu().numpy().mean() # .get().astype(np.float32).mean()
-        print(target_mean, x1_mean)
+        target_mean = x0_batch[:, dim].cpu().numpy().mean()
+        x1_mean = x1_batch[:, dim].cpu().numpy().mean()
         ax.axhline(y=target_mean, color='green', linestyle='--', linewidth=2, label='Target x₀ mean')
         ax.axhline(y=x1_mean, color='orange', linestyle='--', linewidth=2, label='x₁ mean')
         
@@ -314,8 +306,8 @@ def plot_bridge_marginals(x0_batch: torch.Tensor, x1_batch: torch.Tensor,
         ax = axes[1, dim]
         
         # Plot linear interpolation between x0 and x1 means
-        target_mean = x0_batch[:, dim].cpu().numpy().mean() # .get().astype(np.float32).mean()
-        x1_mean = x1_batch[:, dim].cpu().numpy().mean() # .get().astype(np.float32).mean()
+        target_mean = x0_batch[:, dim].cpu().numpy().mean()
+        x1_mean = x1_batch[:, dim].cpu().numpy().mean()
         linear_interp = (1 - times) * target_mean + times * x1_mean
         
         ax.plot(times, linear_interp, 'purple', linewidth=2, label='Linear interpolation')
@@ -351,99 +343,167 @@ def plot_bridge_marginals(x0_batch: torch.Tensor, x1_batch: torch.Tensor,
     return fig
 
 
-def plot_model_samples(model: torch.nn.Module, bridge: Any, dataset: Any, 
-                      n_samples: int = 200, title: str = "Generated Samples") -> plt.Figure:
-    """Generate samples from trained model and visualize them"""
-    # Get some x1 samples from dataset
-    x1_batch = []
-    x0_target = []
+
+def plot_distribution_comparison(x0_source: np.ndarray, x1_target: np.ndarray, 
+                               x0_generated: np.ndarray, 
+                               title: str = "Distribution Comparison") -> plt.Figure:
+    """
+    Create pairplot-style comparison of source, target, and generated distributions.
     
-    for i in range(n_samples):
-        sample = dataset[i % len(dataset)]
-        x1_batch.append(sample['x_1'])
-        x0_target.append(sample['x_0'])
+    Args:
+        x0_source: Source samples (what we start from) [n_samples, d]
+        x1_target: Target samples (what we want to match) [n_samples, d]
+        x0_generated: Generated samples (what our model produces) [n_samples, d]
+        title: Plot title
+    """
+    # Data is already numpy
+    x0_source_np = x0_source
+    x1_target_np = x1_target
+    x0_generated_np = x0_generated
     
-    x1_batch = torch.stack(x1_batch)
-    x0_target = torch.stack(x0_target)
+    n_samples, d = x0_source_np.shape
     
-    # Convert to CuPy and generate samples
-    x1_cp = cp.array(x1_batch)
+    # Select dimensions to plot
+    if d == 1:
+        dims_to_plot = [0]
+    elif d == 2:
+        dims_to_plot = [0, 1]
+    elif d <= 5:
+        dims_to_plot = list(range(d))
+    else:
+        # Sample 5 random dimensions for high-dimensional data
+        np.random.seed(42)  # For reproducibility
+        dims_to_plot = sorted(np.random.choice(d, size=5, replace=False))
     
-    # Use bridge reverse sampler to generate x0 samples
-    model.cuda()
-    with torch.no_grad():
-        x0_generated_cp = bridge.reverse_sampler(
-            x_1=x1_cp,
-            z={},  # No conditioning
-            model=model
-        )
+    n_dims_plot = len(dims_to_plot)
     
-    # Convert back to torch
-    x0_generated = torch.tensor(cp.asnumpy(x0_generated_cp))
-    
-    # Create comparison plot
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-    fig.suptitle(title, fontsize=16)
-    
-    d = min(2, x0_target.shape[1])
-    
-    # Plot histograms for first two dimensions
-    for dim in range(d):
-        ax = axes[0, dim]
+    # Special case for 2D data: create a nice scatter + marginal plot
+    if n_dims_plot == 2:
+        fig, axes = plt.subplots(2, 2, figsize=(10, 10))
+        fig.suptitle(title, fontsize=16)
         
-        generated = x0_generated[:, dim].cpu().numpy()
-        target = x0_target[:, dim].cpu().numpy()
+        dim1, dim2 = dims_to_plot
         
-        ax.hist(generated, bins=20, alpha=0.7, density=True, label='Generated', color='blue')
-        ax.hist(target, bins=20, alpha=0.7, density=True, label='Target', color='red')
+        # Main scatter plot
+        ax_main = axes[1, 0]
+        ax_main.scatter(x0_source_np[:, dim1], x0_source_np[:, dim2], 
+                       alpha=0.6, s=20, label='Source', color='blue')
+        ax_main.scatter(x1_target_np[:, dim1], x1_target_np[:, dim2], 
+                       alpha=0.6, s=20, label='Target', color='red')
+        ax_main.scatter(x0_generated_np[:, dim1], x0_generated_np[:, dim2], 
+                       alpha=0.6, s=20, label='Generated', color='green')
+        ax_main.set_xlabel(f'Dimension {dim1}')
+        ax_main.set_ylabel(f'Dimension {dim2}')
+        ax_main.legend()
+        ax_main.grid(True, alpha=0.3)
         
-        ax.set_title(f'Dimension {dim} Distribution')
-        ax.set_xlabel('Count value')
-        ax.set_ylabel('Density')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
+        # Top marginal (dim1)
+        ax_top = axes[0, 0]
+        ax_top.hist(x0_source_np[:, dim1], bins=30, alpha=0.6, density=True, 
+                   label='Source', color='blue')
+        ax_top.hist(x1_target_np[:, dim1], bins=30, alpha=0.6, density=True, 
+                   label='Target', color='red')
+        ax_top.hist(x0_generated_np[:, dim1], bins=30, alpha=0.6, density=True, 
+                   label='Generated', color='green')
+        ax_top.set_ylabel('Density')
+        ax_top.set_title(f'Dimension {dim1} Marginal')
+        ax_top.legend()
+        ax_top.grid(True, alpha=0.3)
+        
+        # Right marginal (dim2)
+        ax_right = axes[1, 1]
+        ax_right.hist(x0_source_np[:, dim2], bins=30, alpha=0.6, density=True, 
+                     orientation='horizontal', label='Source', color='blue')
+        ax_right.hist(x1_target_np[:, dim2], bins=30, alpha=0.6, density=True, 
+                     orientation='horizontal', label='Target', color='red')
+        ax_right.hist(x0_generated_np[:, dim2], bins=30, alpha=0.6, density=True, 
+                     orientation='horizontal', label='Generated', color='green')
+        ax_right.set_xlabel('Density')
+        ax_right.set_title(f'Dimension {dim2} Marginal')
+        ax_right.legend()
+        ax_right.grid(True, alpha=0.3)
+        
+        # Empty the top-right subplot
+        axes[0, 1].axis('off')
+        
+        plt.tight_layout()
+        return fig
     
-    # Scatter plot of means
-    ax = axes[1, 0]
-    gen_means = x0_generated.float().mean(0).cpu().numpy()
-    target_means = x0_target.float().mean(0).cpu().numpy()
+    # For higher dimensions, create a pairplot using seaborn
+    else:
+        # Create combined dataset
+        data_list = []
+        
+        # Add source data
+        for i in range(n_samples):
+            row = {'type': 'Source'}
+            for j, dim in enumerate(dims_to_plot):
+                row[f'dim_{dim}'] = x0_source_np[i, dim]
+            data_list.append(row)
+        
+        # Add target data  
+        for i in range(n_samples):
+            row = {'type': 'Target'}
+            for j, dim in enumerate(dims_to_plot):
+                row[f'dim_{dim}'] = x1_target_np[i, dim]
+            data_list.append(row)
+        
+        # Add generated data
+        for i in range(n_samples):
+            row = {'type': 'Generated'}
+            for j, dim in enumerate(dims_to_plot):
+                row[f'dim_{dim}'] = x0_generated_np[i, dim]
+            data_list.append(row)
+        
+        # Create DataFrame
+        df = pd.DataFrame(data_list)
+        
+        # Create pairplot
+        fig = plt.figure(figsize=(3*n_dims_plot, 3*n_dims_plot))
+        
+        # Use seaborn pairplot
+        vars_to_plot = [f'dim_{dim}' for dim in dims_to_plot]
+        g = sns.pairplot(df, vars=vars_to_plot, hue='type', 
+                        palette={'Source': 'blue', 'Target': 'red', 'Generated': 'green'},
+                        plot_kws={'s': 20, 'alpha': 0.6})
+        
+        g.fig.suptitle(title, y=1.02, fontsize=16)
+        
+        return g.fig
+
+
+def plot_model_samples(eval_data: Dict[str, Any], title: str = "Model Evaluation") -> Dict[str, plt.Figure]:
+    """
+    Create comprehensive model evaluation plots from evaluation data.
     
-    ax.scatter(target_means, gen_means, alpha=0.7, s=50)
-    min_val = min(target_means.min(), gen_means.min())
-    max_val = max(target_means.max(), gen_means.max())
-    ax.plot([min_val, max_val], [min_val, max_val], 'r--', alpha=0.7, label='Perfect match')
-    ax.set_xlabel('Target mean')
-    ax.set_ylabel('Generated mean')
-    ax.set_title('Mean Comparison')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
+    Args:
+        eval_data: Dictionary from eval.generate_evaluation_data()
+        title: Base title for plots
+        
+    Returns:
+        Dictionary with 'trajectories' and 'distributions' figures
+    """
+    figures = {}
     
-    # Sample trajectories
-    ax = axes[1, 1]
-    n_show = min(50, len(x0_generated))
+    # 1. Trajectory plot
+    figures['trajectories'] = plot_full_reverse_trajectories(
+        x_trajectory=eval_data['x_trajectory'],
+        x_hat_trajectory=eval_data['x_hat_trajectory'],
+        M_trajectory=eval_data['M_trajectory'],
+        x0_target=eval_data['x0_target'],
+        x1_batch=eval_data['x1_batch'],
+        title=f"{title} - Trajectories"
+    )
     
-    for dim in range(min(2, d)):
-        # Show individual trajectories
-        for i in range(min(10, n_show)):
-            ax.plot([0, 1], [x1_batch[i, dim].item(), x0_generated[i, dim].item()], 
-                   alpha=0.3, color='blue' if dim == 0 else 'orange', linewidth=1)
+    # 2. Distribution comparison
+    figures['distributions'] = plot_distribution_comparison(
+        x0_source=eval_data['x1_batch'],  # Source is x1 (what we start reverse sampling from)
+        x1_target=eval_data['x0_target'],  # Target is x0 (what we want to generate)
+        x0_generated=eval_data['x0_generated'],  # Generated is our model output
+        title=f"{title} - Distribution Comparison"
+    )
     
-    # Add means
-    x1_means = x1_batch.float().mean(0)
-    gen_means_torch = x0_generated.float().mean(0)
-    for dim in range(min(2, d)):
-        ax.plot([0, 1], [x1_means[dim].item(), gen_means_torch[dim].item()], 
-               'k-', linewidth=3, label=f'Mean dim {dim}')
-    
-    ax.set_xlabel('Process (0=x1, 1=x0)')
-    ax.set_ylabel('Count value')
-    ax.set_title('Sample Trajectories')
-    if d > 1:
-        ax.legend()
-    ax.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    return fig
+    return figures
 
 
 def save_plots(figs: Dict[str, plt.Figure], output_dir: str = "plots") -> None:

@@ -14,11 +14,13 @@ import numpy as np
 import os
 import hashlib
 import json
+from typing import Any
 
 # Capture original working directory before Hydra changes it
 ORIGINAL_CWD = Path.cwd().resolve()
 
 from visualization import plot_loss_curve, plot_bridge_marginals, plot_model_samples, save_plots
+from eval import generate_evaluation_data, compute_evaluation_metrics, log_evaluation_summary
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -122,6 +124,7 @@ def save_checkpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer,
     torch.save(checkpoint, checkpoint_path)
     logging.info(f"Checkpoint saved to: {checkpoint_path}")
     
+
 
 
 @hydra.main(version_base=None, config_path="configs", config_name="config")
@@ -325,14 +328,20 @@ def main(cfg: DictConfig) -> None:
         # Generate and visualize samples from the trained model
         if not skip_training or checkpoint:
             logging.info("Generating samples from trained model...")
-            sample_fig = plot_model_samples(
-                model=trained_model,
-                bridge=bridge, 
-                dataset=dataset,
-                n_samples=200,
-                title="Generated Samples"
-            )
-            plots['generated_samples'] = sample_fig
+            
+            # Generate evaluation data (samples, trajectories, metrics)
+            eval_data = generate_evaluation_data(trained_model, bridge, dataset, n_samples=200)
+            
+            # Compute and log evaluation metrics
+            metrics = compute_evaluation_metrics(eval_data)
+            log_evaluation_summary(eval_data, metrics)
+            
+            # Create plots from evaluation data
+            sample_figs = plot_model_samples(eval_data, title="Generated Samples")
+            
+            # Add both trajectory and distribution plots
+            plots['model_trajectories'] = sample_figs['trajectories']
+            plots['model_distributions'] = sample_figs['distributions']
 
     # Save all plots
     if plots:

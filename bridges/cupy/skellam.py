@@ -45,7 +45,7 @@ class SkellamBridge:
             k = cp.broadcast_to(k, (b,))
 
         elif self.homogeneous_time:
-            k = cp.random.randint(0, self.n_steps + 1)
+            k = cp.random.randint(1, self.n_steps + 1)
             k = cp.broadcast_to(k, (b,))
         else:
             k = cp.random.randint(1, self.n_steps + 1, (b,))
@@ -84,9 +84,10 @@ class SkellamBridge:
         guidance_schedule: cp.ndarray = None,
     ):
         b, d    = x_1.shape
-        x_t     = x_1.astype(cp.int32)
+        x_t     = cp.from_dlpack(x_1).round().astype(cp.int32)
+
         if guidance_x_0 is not None:
-            guidance_x_0 = guidance_x_0.astype(cp.int32)
+            guidance_x_0 = cp.from_dlpack(guidance_x_0).round().astype(cp.int32)
 
         def sample_step(k, x_t, M_t=None, **z):
             if M_t is None:
@@ -96,7 +97,7 @@ class SkellamBridge:
             t = cp.broadcast_to(self.time_points[k], (b, 1))
             x_t_dl, M_t_dl, t_dl = dlpack_backend(x_t, M_t, t, backend=self.backend, dtype="float32")
             x0_hat_t = model.sample(x_t_dl, M_t_dl, t_dl, **z)
-            x0_hat_t = dlpack_backend(x0_hat_t, backend='cupy', dtype="int32")
+            x0_hat_t = cp.from_dlpack(x0_hat_t)
 
             if guidance_x_0 is not None:
                 x0_hat_t =  guidance_schedule[k] * guidance_x_0 + (1 - guidance_schedule[k]) * x0_hat_t
