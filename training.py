@@ -5,14 +5,12 @@ Simplified training loop that works with CuPy bridges and normal epochs.
 """
 
 import torch
-import cupy as cp
 from torch.utils.data import DataLoader
 import os
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 import logging
 
-from bridges.cupy.utils import dlpack_backend
 
 def save_model_checkpoint(
     model: torch.nn.Module, 
@@ -120,18 +118,13 @@ class CountFlowTrainer:
     def training_step(self, model: torch.nn.Module, bridge: Any, batch: Dict[str, torch.Tensor]) -> float:
         """Execute a single training step"""
         # Extract data from batch
-        x_0 = batch['x_0']  # Source counts
-        x_1 = batch['x_1']  # Target counts  
+        x_0 = batch['x_0'].to(self.device)  # Source counts
+        x_1 = batch['x_1'].to(self.device)  # Target counts  
         z = None  # No conditioning for simple case
         
-        # Convert to CuPy for bridge processing
-        x_0_cp, x_1_cp = cp.array(x_0), cp.array(x_1)
         
         # Apply bridge to get diffusion samples
-        x_t_cp, M_t_cp, t_cp = bridge(x_0_cp, x_1_cp)
-        
-        # Convert back to PyTorch tensors for model
-        x_0, x_1, x_t, M_t, t = dlpack_backend(x_0_cp, x_1_cp, x_t_cp, M_t_cp, t_cp)
+        x_t, M_t, t = bridge(x_0, x_1)
         
         # Training step
         self.optimizer.zero_grad()

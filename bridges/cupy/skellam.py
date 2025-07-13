@@ -15,6 +15,7 @@ class SkellamBridge:
         m_sampler: Callable,
         schedule_type: str = "linear",
         homogeneous_time: bool = False,
+        backend: str = "torch",
         **schedule_kwargs,
     ):
         self.n_steps          = n_steps
@@ -25,10 +26,10 @@ class SkellamBridge:
         self.weights          = make_weight_schedule(
             n_steps, schedule_type, **schedule_kwargs
         )
+        self.backend          = backend
 
     def __call__(self, x_0, x_1, t_target=None):
-        x_0 = x_0.astype(cp.int32)
-        x_1 = x_1.astype(cp.int32)
+        x_0, x_1 = dlpack_backend(x_0, x_1, backend='cupy', dtype="int32")
 
         b, d = x_0.shape
 
@@ -67,9 +68,9 @@ class SkellamBridge:
         x_t = x_1 - 2 * (B_1 - B_t) + (N_1 - N_t)
 
         diff_t = cp.abs(x_t - x_0)
-        M_t    = ((N_t - diff_t) >> 1)
+        M_t    = (N_t - diff_t) >> 1
 
-        return x_t, M_t, t
+        return dlpack_backend(x_t, M_t, t, backend=self.backend, dtype="float32")
     
     def reverse_sampler(
         self,
@@ -93,9 +94,9 @@ class SkellamBridge:
                     M_t = self.m_sampler(x_t)
 
             t = cp.broadcast_to(self.time_points[k], (b, 1))
-            x_t_dl, M_t_dl, t_dl = dlpack_backend(x_t, M_t, t, backend="torch")
+            x_t_dl, M_t_dl, t_dl = dlpack_backend(x_t, M_t, t, backend=self.backend, dtype="float32")
             x0_hat_t = model.sample(x_t_dl, M_t_dl, t_dl, **z)
-            x0_hat_t = cp.from_dlpack(x0_hat_t)
+            x0_hat_t = dlpack_backend(x0_hat_t, backend='cupy', dtype="int32")
 
             if guidance_x_0 is not None:
                 x0_hat_t =  guidance_schedule[k] * guidance_x_0 + (1 - guidance_schedule[k]) * x0_hat_t

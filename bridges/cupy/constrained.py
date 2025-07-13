@@ -1,9 +1,9 @@
 import cupy as cp
 from typing import Callable
 from .scheduling import make_weight_schedule
-from ...sampling.cupy.mvhg import mvhg
-from ...sampling.cupy.ffh import ffh
-from ...sampling.cupy.prop import proportional_proj
+from .sampling.mvhg import mvhg
+from .sampling.ffh import ffh
+from .sampling.prop import proportional_proj
 from .utils import dlpack_backend
 
 class SkellamMeanConstrainedBridge:
@@ -21,6 +21,7 @@ class SkellamMeanConstrainedBridge:
         m_sampler: Callable,
         schedule_type: str = "linear",
         mh_sweeps: int = 75,
+        backend: str = "torch",
         **schedule_kwargs,
     ):
         self.n_steps        = n_steps
@@ -31,19 +32,19 @@ class SkellamMeanConstrainedBridge:
             n_steps, schedule_type, **schedule_kwargs
         )
         self.mh_sweeps      = mh_sweeps
+        self.backend        = backend
 
-    def __call__(self, x0, x1, t_target=None):
+    def __call__(self, x_0, x_1, t_target=None):
         # unpack
-        x0 = x0.astype(cp.int32)
-        x1 = x1.astype(cp.int32)
+        x_0, x_1 = dlpack_backend(x_0, x_1, backend='cupy', dtype="int32")
 
-        b, d   = x0.shape
+        b, d   = x_0.shape
 
         # latent (N, M, B1)
-        diff = x1 - x0
+        diff = x_1 - x_0
         M = self.m_sampler(diff)
         N_1 = cp.abs(diff) + 2 * M
-        B_1 = (N_1 + diff) // 2
+        B_1 = (N_1 + diff) >> 1
 
         # choose time index - either specified or random
         if t_target is not None:
@@ -58,19 +59,19 @@ class SkellamMeanConstrainedBridge:
         t      = self.time_points[k].reshape(-1, 1)                            # (b,)
         w_t    = self.weights[k]                                # (b,)
 
-        Nt_tot = (w_t * N_1.sum(axis=0)).round().astype(cp.int32)
-        Bt_tot = (w_t * B_1.sum(axis=0)).round().astype(cp.int32)
+        Nt_tot = (w_t.reshape(-1, 1) * N_1.sum(axis=0, keepdims=True)).round().astype(cp.int32)
+        Bt_tot = (w_t.reshape(-1, 1) * B_1.sum(axis=0, keepdims=True)).round().astype(cp.int32)
 
         N_t = mvhg(pop=N_1.T, draws_tot=Nt_tot).T
-        B_t = ffh(w=B_1.T, b=(N_1 - B_1).T, k=N_t.T, S=Bt_tot).T
+        B_t = ffh(w=B_1.T, b=(N_1 - B_1).T, k=N_t.T, S=Bt_tot, sweeps=self.mh_sweeps).T
 
-        x_t = x1 - 2 * (B_1 - B_t) + (N_1 - N_t)
+        x_t = x_1 - 2 * (B_1 - B_t) + (N_1 - N_t)
 
         # recompute diff & slack pairs after MH (keeps N_t fixed)
-        diff_t = (x_t - x0)
-        M_t    = (N_t - cp.abs(diff_t)) // 2
+        diff_t = (x_t - x_0)
+        M_t    = (N_t - cp.abs(diff_t)) >> 1
 
-        return x_t, M_t, t
+        return dlpack_backend(x_t, M_t, t, backend=self.backend, dtype="float32")
 
     def reverse_sampler(
         self,
@@ -107,9 +108,9 @@ class SkellamMeanConstrainedBridge:
                     M_t = self.m_sampler(x_t)
 
             t = cp.broadcast_to(self.time_points[k], (b, 1))
-            x_t_dl, M_t_dl, t_dl = dlpack_backend(x_t, M_t, t, backend="torch")
+            x_t_dl, M_t_dl, t_dl = dlpack_backend(x_t, M_t, t, backend=self.backend, dtype="float32")
             x0_hat_t = model.sample(x_t_dl, M_t_dl, t_dl, **z)
-            x0_hat_t = cp.from_dlpack(x0_hat_t)
+            x0_hat_t = dlpack_backend(x0_hat_t, backend='cupy', dtype="int32")
 
             if guidance_x_0 is not None:
                 x0_hat_t =  guidance_schedule[k] * guidance_x_0 + (1 - guidance_schedule[k]) * x0_hat_t
@@ -137,7 +138,7 @@ class SkellamMeanConstrainedBridge:
             x_s = x_t - 2 * (B_t - B_s) + (N_t - N_s) 
 
             diff_s = cp.abs(x_s - x0_hat_t)
-            M_s    = ((N_s - diff_s) >> 1) 
+            M_s    = (N_s - diff_s) >> 1
             return x_s, M_s, x0_hat_t
 
         x_t, M_t, x0_hat_t = sample_step(self.n_steps, x_1, **z)
