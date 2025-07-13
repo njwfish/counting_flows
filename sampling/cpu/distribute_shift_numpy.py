@@ -57,10 +57,3 @@ def sample_pert(ctrl, weighted_dist, mean_shift, max_rejections=100):
     sampled_pert = ctrl + np.sign(count_shift) * samples
     sampled_pert = np.clip(sampled_pert, 0, None)
     return sampled_pert
-
-def hard_sample_pert(ctrl, weighted_dist, mean_shift, round_pert=False):
-    # this can probably be better too. really we should like solve a linear program to find the closest integer solution
-    count_shift = np.round(mean_shift * ctrl.shape[0])
-    sampled_pert = ctrl + np.round(count_shift * weighted_dist) if round_pert else ctrl + (count_shift * weighted_dist)
-    sampled_pert = np.clip(sampled_pert, 0, None)
-    return sampled_pert
