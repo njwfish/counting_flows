@@ -30,6 +30,10 @@ def hypergeometric_torch(total_count, success_count, num_draws):
     Internal torch-based hypergeometric sampling function.
     Assumes all inputs are already torch tensors on the same device.
     """
+    success_count = success_count.long()
+    num_draws = num_draws.long()
+    total_count = total_count.long()
+    
     # Handle edge cases with clipping
     success_count = torch.clamp(success_count, min=0)
     success_count = torch.min(success_count, total_count)
