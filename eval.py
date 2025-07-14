@@ -86,22 +86,14 @@ def generate_evaluation_data(model: torch.nn.Module, bridge: Any, dataset: Any,
             x0_generated_np = x0_generated.get().astype(np.float32)
             
             # Convert trajectory arrays to lists of numpy arrays
-            x_trajectory_np = [x_trajectory[i].get().astype(np.float32) for i in range(len(x_trajectory))]
-            x_hat_trajectory_np = [x_hat_trajectory[i].get().astype(np.float32) for i in range(len(x_hat_trajectory))]
-            M_trajectory_np = [M_trajectory[i].get().astype(np.float32) for i in range(len(M_trajectory))]
+            x_trajectory_np = x_trajectory.get().astype(np.float32)
+            x_hat_trajectory_np = x_hat_trajectory.get().astype(np.float32)
+            M_trajectory_np = M_trajectory.get().astype(np.float32)
             
             # Ensure trajectories start with x1
             if len(x_trajectory_np) > 0 and not np.allclose(x_trajectory_np[0], x1_np, atol=1e-6):
                 x_trajectory_np = [x1_np.astype(np.float32)] + x_trajectory_np
                 
-        else:
-            # Fallback: just get final samples
-            x0_generated = bridge.reverse_sampler(x_1=x1_batch, z={}, model=model)
-            x0_generated_np = x0_generated.get().astype(np.float32)
-            x_trajectory_np = [x1_np.astype(np.float32), x0_generated_np]
-            x_hat_trajectory_np = [x0_generated_np]
-            M_trajectory_np = [np.zeros_like(x0_generated_np)]
-    
     # Package results
     eval_data = {
         'x0_generated': x0_generated_np,

@@ -33,8 +33,10 @@ def plot_loss_curve(losses: List[float], title: str = "Training Loss") -> plt.Fi
     return fig
 
 
-def plot_generation_analysis(x0_samples: torch.Tensor, x0_target: torch.Tensor, 
-                           x1_batch: torch.Tensor, title: str = "Generation Analysis") -> plt.Figure:
+def plot_generation_analysis(
+    x0_samples: torch.Tensor, x0_target: torch.Tensor, x1_batch: torch.Tensor, 
+    title: str = "Generation Analysis"
+) -> plt.Figure:
     """Analyze the quality of generated samples"""
     fig, axes = plt.subplots(2, 3, figsize=(15, 10))
     fig.suptitle(title)
@@ -344,24 +346,25 @@ def plot_bridge_marginals(x0_batch: torch.Tensor, x1_batch: torch.Tensor,
 
 
 
-def plot_distribution_comparison(x0_source: np.ndarray, x1_target: np.ndarray, 
-                               x0_generated: np.ndarray, 
-                               title: str = "Distribution Comparison") -> plt.Figure:
+def plot_distribution_comparison(
+    x0_target: np.ndarray, x1_source: np.ndarray, x0_generated: np.ndarray, 
+    title: str = "Distribution Comparison"
+) -> plt.Figure:
     """
     Create pairplot-style comparison of source, target, and generated distributions.
     
     Args:
-        x0_source: Source samples (what we start from) [n_samples, d]
-        x1_target: Target samples (what we want to match) [n_samples, d]
+        x0_target: Target samples (what we want to generate) [n_samples, d]
+        x1_source: Source samples (what we start reverse sampling from) [n_samples, d]
         x0_generated: Generated samples (what our model produces) [n_samples, d]
         title: Plot title
     """
     # Data is already numpy
-    x0_source_np = x0_source
-    x1_target_np = x1_target
+    x0_target_np = x0_target
+    x1_source_np = x1_source
     x0_generated_np = x0_generated
     
-    n_samples, d = x0_source_np.shape
+    n_samples, d = x0_target_np.shape
     
     # Select dimensions to plot
     if d == 1:
@@ -386,10 +389,10 @@ def plot_distribution_comparison(x0_source: np.ndarray, x1_target: np.ndarray,
         
         # Main scatter plot
         ax_main = axes[1, 0]
-        ax_main.scatter(x0_source_np[:, dim1], x0_source_np[:, dim2], 
-                       alpha=0.6, s=20, label='Source', color='blue')
-        ax_main.scatter(x1_target_np[:, dim1], x1_target_np[:, dim2], 
-                       alpha=0.6, s=20, label='Target', color='red')
+        ax_main.scatter(x0_target_np[:, dim1], x0_target_np[:, dim2], 
+                       alpha=0.6, s=20, label='Target', color='blue')
+        ax_main.scatter(x1_source_np[:, dim1], x1_source_np[:, dim2], 
+                       alpha=0.6, s=20, label='Source', color='red')
         ax_main.scatter(x0_generated_np[:, dim1], x0_generated_np[:, dim2], 
                        alpha=0.6, s=20, label='Generated', color='green')
         ax_main.set_xlabel(f'Dimension {dim1}')
@@ -399,10 +402,10 @@ def plot_distribution_comparison(x0_source: np.ndarray, x1_target: np.ndarray,
         
         # Top marginal (dim1)
         ax_top = axes[0, 0]
-        ax_top.hist(x0_source_np[:, dim1], bins=30, alpha=0.6, density=True, 
-                   label='Source', color='blue')
-        ax_top.hist(x1_target_np[:, dim1], bins=30, alpha=0.6, density=True, 
-                   label='Target', color='red')
+        ax_top.hist(x0_target_np[:, dim1], bins=30, alpha=0.6, density=True, 
+                   label='Target', color='blue')
+        ax_top.hist(x1_source_np[:, dim1], bins=30, alpha=0.6, density=True, 
+                   label='Source', color='red')
         ax_top.hist(x0_generated_np[:, dim1], bins=30, alpha=0.6, density=True, 
                    label='Generated', color='green')
         ax_top.set_ylabel('Density')
@@ -412,10 +415,10 @@ def plot_distribution_comparison(x0_source: np.ndarray, x1_target: np.ndarray,
         
         # Right marginal (dim2)
         ax_right = axes[1, 1]
-        ax_right.hist(x0_source_np[:, dim2], bins=30, alpha=0.6, density=True, 
-                     orientation='horizontal', label='Source', color='blue')
-        ax_right.hist(x1_target_np[:, dim2], bins=30, alpha=0.6, density=True, 
-                     orientation='horizontal', label='Target', color='red')
+        ax_right.hist(x0_target_np[:, dim2], bins=30, alpha=0.6, density=True, 
+                     orientation='horizontal', label='Target', color='blue')
+        ax_right.hist(x1_source_np[:, dim2], bins=30, alpha=0.6, density=True, 
+                     orientation='horizontal', label='Source', color='red')
         ax_right.hist(x0_generated_np[:, dim2], bins=30, alpha=0.6, density=True, 
                      orientation='horizontal', label='Generated', color='green')
         ax_right.set_xlabel('Density')
@@ -436,16 +439,16 @@ def plot_distribution_comparison(x0_source: np.ndarray, x1_target: np.ndarray,
         
         # Add source data
         for i in range(n_samples):
-            row = {'type': 'Source'}
+            row = {'type': 'Target'}
             for j, dim in enumerate(dims_to_plot):
-                row[f'dim_{dim}'] = x0_source_np[i, dim]
+                row[f'dim_{dim}'] = x0_target_np[i, dim]
             data_list.append(row)
         
         # Add target data  
         for i in range(n_samples):
-            row = {'type': 'Target'}
+            row = {'type': 'Source'}
             for j, dim in enumerate(dims_to_plot):
-                row[f'dim_{dim}'] = x1_target_np[i, dim]
+                row[f'dim_{dim}'] = x1_source_np[i, dim]
             data_list.append(row)
         
         # Add generated data
@@ -471,8 +474,10 @@ def plot_distribution_comparison(x0_source: np.ndarray, x1_target: np.ndarray,
         
         return g.fig
 
-
-def plot_model_samples(eval_data: Dict[str, Any], title: str = "Model Evaluation") -> Dict[str, plt.Figure]:
+def plot_model_samples(
+    eval_data: Dict[str, Any], 
+    title: str = "Model Evaluation"
+) -> Dict[str, plt.Figure]:
     """
     Create comprehensive model evaluation plots from evaluation data.
     
@@ -487,7 +492,7 @@ def plot_model_samples(eval_data: Dict[str, Any], title: str = "Model Evaluation
     
     # 1. Trajectory plot
     figures['trajectories'] = plot_full_reverse_trajectories(
-        x_trajectory=eval_data['x_trajectory'],
+        trajectory=eval_data['x_trajectory'],
         x_hat_trajectory=eval_data['x_hat_trajectory'],
         M_trajectory=eval_data['M_trajectory'],
         x0_target=eval_data['x0_target'],
@@ -497,8 +502,8 @@ def plot_model_samples(eval_data: Dict[str, Any], title: str = "Model Evaluation
     
     # 2. Distribution comparison
     figures['distributions'] = plot_distribution_comparison(
-        x0_source=eval_data['x1_batch'],  # Source is x1 (what we start reverse sampling from)
-        x1_target=eval_data['x0_target'],  # Target is x0 (what we want to generate)
+        x0_target=eval_data['x0_target'],  # Target is x0 (what we want to generate)
+        x1_source=eval_data['x1_batch'],  # Source is x1 (what we start reverse sampling from)
         x0_generated=eval_data['x0_generated'],  # Generated is our model output
         title=f"{title} - Distribution Comparison"
     )

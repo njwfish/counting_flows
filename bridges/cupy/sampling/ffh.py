@@ -36,22 +36,38 @@ void ffh_mh_seq_flat(
     int base = d * Bdim;
     rk_state st; rk_seed(seed + (unsigned long long)d, &st);
 
+    extern __shared__ int sh[];        // 6 * Bdim ints
+    int *below   = sh;                 // slots [0 .. Bdim-1]
+    int *above   = sh + Bdim;          // slots [Bdim .. 2*Bdim-1]
+    int *gapB    = sh + 2*Bdim;        // [2*Bdim .. 3*Bdim-1]
+    int *gapA    = sh + 3*Bdim;        // [3*Bdim .. 4*Bdim-1]
+    int *incList = sh + 4*Bdim;        // [4*Bdim .. 5*Bdim-1]
+    int *decList = sh + 5*Bdim;        // [5*Bdim .. 6*Bdim-1]
+    int nB = 0, nA = 0, incN = 0, decN = 0, totB = 0, totA = 0;
+
     // 1) independent HG draws
     int sum = 0;
     for (int i = 0; i < Bdim; ++i) {
         int wi = W[base + i];
         int bi = Bk[ base + i];
         int ki = K[  base + i];
-        int xi = rk_hypergeometric(&st, wi, bi, ki);
+        int xi;
+        if (ki == 0 || wi == 0) {
+            xi = 0;                         // safe short–circuit
+        } else if (bi == 0) {
+            xi = ki;                        // entire sample must be white
+        } else {
+            xi = rk_hypergeometric(&st, wi, bi, ki);
+        }
         X[base + i] = xi;
         sum += xi;
     }
 
     // 2) repair to per-bin rounded mean
-    int below[128], above[128];
-    int gapB[128], gapA[128];
-    int nB = 0, nA = 0;
-    int totB = 0, totA = 0;
+    // int below[128], above[128];
+    // int gapB[128], gapA[128];
+    // int nB = 0, nA = 0;
+    // int totB = 0, totA = 0;
     for (int i = 0; i < Bdim; ++i) {
         int wi = W[base + i];
         int bi = Bk[ base + i];
@@ -106,8 +122,8 @@ void ffh_mh_seq_flat(
     }
 
     // ----- Before MH: build donor (dec) and receiver (inc) lists -----
-    int incList[128], decList[128];
-    int incN = 0, decN = 0;
+    // int incList[128], decList[128];
+    // int incN = 0, decN = 0;
 
     for (int i = 0; i < Bdim; ++i) {
         int lo = max(0,   K[base+i] - Bk[base+i]);
@@ -195,7 +211,19 @@ def ffh(w, b, k, S, sweeps=48, seed=None):
     D, Bdim = w.shape
     Xf = cp.empty_like(Wf)
     seed = int(seed or cp.random.randint(0,2**63-1,(),dtype=cp.uint64))
-    ffh_mh_flat((D,), (1,),
-                (Wf, Bf, Kf, Sf, Bdim, sweeps, seed, Xf))
+
+    D, Bdim = w.shape
+    # each int is 4 bytes, and we need 6 arrays of length Bdim
+    shared_bytes = 6 * Bdim * 4
+
+    ffh_mh_flat(
+        (D,), (1,),
+        (Wf, Bf, Kf, Sf, Bdim, sweeps, seed, Xf),
+        shared_mem=shared_bytes
+    )
     cp.cuda.Stream.null.synchronize()
+    # return Xf.reshape(D, Bdim)
+    # ffh_mh_flat((D,), (1,),
+    #             (Wf, Bf, Kf, Sf, Bdim, sweeps, seed, Xf))
+    # cp.cuda.Stream.null.synchronize()
     return Xf.reshape(D, Bdim)

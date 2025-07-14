@@ -42,6 +42,7 @@ class EnergyScorePosterior(nn.Module):
             nn.Linear(hidden, x_dim),
         )
 
+
     def forward(self, x_t, M_t, t, z=None, noise=None):
         """
         x_t: [B, x_dim]
@@ -116,4 +117,4 @@ class EnergyScorePosterior(nn.Module):
         mean_pd   = pdists.mean(dim=1)                                # [n]
         term_int  = (λ / 2.0) * mean_pd                               # [n]
 
-        return (term_conf - term_int).mean(), x0_preds
+        return (term_conf - term_int).mean(), x0_preds.mean(dim=1)

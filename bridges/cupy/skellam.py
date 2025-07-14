@@ -36,7 +36,7 @@ class SkellamBridge:
         diff = (x_1 - x_0)
         M = self.m_sampler(diff)
         N_1 = cp.abs(diff) + 2 * M
-        B_1 = (N_1 + diff) >> 1
+        B_1 = (N_1 + diff) // 2
 
         if t_target is not None:
             # find closest time point
@@ -68,7 +68,7 @@ class SkellamBridge:
         x_t = x_1 - 2 * (B_1 - B_t) + (N_1 - N_t)
 
         diff_t = cp.abs(x_t - x_0)
-        M_t    = (N_t - diff_t) >> 1
+        M_t    = (N_t - diff_t) // 2
 
         return dlpack_backend(x_t, M_t, t, backend=self.backend, dtype="float32")
     
@@ -94,6 +94,7 @@ class SkellamBridge:
                 if not self.m_sampler.markov:
                     M_t = self.m_sampler(x_t)
 
+            print(k, self.time_points[k])
             t = cp.broadcast_to(self.time_points[k], (b, 1))
             x_t_dl, M_t_dl, t_dl = dlpack_backend(x_t, M_t, t, backend=self.backend, dtype="float32")
             x0_hat_t = model.sample(x_t_dl, M_t_dl, t_dl, **z)
@@ -110,7 +111,7 @@ class SkellamBridge:
                 M_t = self.m_sampler(diff)
 
             N_t         = cp.abs(diff) + 2 * M_t
-            B_t         = (N_t + diff) >> 1
+            B_t         = (N_t + diff) // 2
 
             ρ = (self.weights[k-1] / self.weights[k])
             non_zero = N_t > 0
@@ -127,7 +128,7 @@ class SkellamBridge:
 
             x_s = x_t - 2 * (B_t - B_s) + (N_t - N_s)
             diff_s = cp.abs(x_s - x0_hat_t)
-            M_s = (N_s - diff_s) >> 1  
+            M_s = (N_s - diff_s) // 2  
 
             return x_s, M_s, x0_hat_t
         
