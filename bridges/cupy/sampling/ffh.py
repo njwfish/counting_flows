@@ -158,15 +158,26 @@ void ffh_mh_seq_flat(
         int xj2 = xj + 1;
 
         // compute log-ratio
-        float lr = logP(wi,bi,ki,xi2)
-                + logP(wj,bj,kj,xj2)
-                - logP(wi,bi,ki, xi )
-                - logP(wj,bj,kj, xj );
-
+        // float lr = logP(wi,bi,ki,xi2)
+        //        + logP(wj,bj,kj,xj2)
+        //        - logP(wi,bi,ki, xi )
+        //        - logP(wj,bj,kj, xj );
         // single U for accept
-        float u = rk_double(&st);
-        // printf("u: %f, lr: %f, exp(lr): %f\n", u, lr, expf(lr));
-        if (u < expf(lr)) {
+        // float u = rk_double(&st);
+
+        // direct, hypergeometric‐free acceptance ratio in double precision
+        double rri = (double)xi   / (wi - xi + 1)
+                  * ((double)(bi - (ki - xi)) / (ki - xi + 1));
+        double rrj = (double)(wj - xj) / (xj + 1)
+                  * ((double)(kj - xj) / ((bj - (kj - xj)) + 1));
+        double ratio = rri * rrj;
+
+        // accept with probability min(1, ratio)
+        double u = rk_double(&st);
+        if (u < ratio) {
+
+        // printf("u: %f, exp(lr): %f\n", u, ratio);
+        // if (u < expf(lr)) {
             // printf("accepting swap\n");
             // accept
             X[base+i] = xi2;
