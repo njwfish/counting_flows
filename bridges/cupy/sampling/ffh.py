@@ -11,7 +11,7 @@ preamble = (
 )
 
 kernel_src = r'''
-// ── helpers ----------------------------------------------------------
+//  helpers ----------------------------------------------------------
 __device__ inline float logC(int n,int r){
     return loggam(n+1) - loggam(r+1) - loggam(n-r+1);
 }
@@ -137,7 +137,7 @@ void ffh_mh_seq_flat(
         int lo_i = max(0,   ki - bi), hi_i = min(wi, ki);
         int lo_j = max(0,   kj - bj), hi_j = min(wj, kj);
 
-        // propose move: take one white from i → j
+        // propose move: take one white from i to j
         int xi2 = xi - 1;
         int xj2 = xj + 1;
 
