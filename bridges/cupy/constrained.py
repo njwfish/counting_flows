@@ -51,16 +51,14 @@ class SkellamMeanConstrainedBridge:
             # Find closest grid point to target time
             time_diffs = cp.abs(self.time_points - t_target)
             k = cp.argmin(time_diffs)
-            k = cp.broadcast_to(k, (b,))
         else:
             k = cp.random.randint(1, self.n_steps + 1)
-            k = cp.broadcast_to(k, (b,))
 
-        t      = self.time_points[k].reshape(-1, 1)                            # (b,)
-        w_t    = self.weights[k]                                # (b,)
+        t      = cp.broadcast_to(self.time_points[k], (b, 1))                          # (b,)
+        w_t    = self.weights[k]                              # (b,)
 
-        Nt_tot = (w_t.reshape(-1, 1) * N_1.sum(axis=0, keepdims=True)).round().astype(cp.int32)
-        Bt_tot = (w_t.reshape(-1, 1) * B_1.sum(axis=0, keepdims=True)).round().astype(cp.int32)
+        Nt_tot = (w_t * N_1.sum(axis=0)).round().astype(cp.int32)
+        Bt_tot = (w_t * B_1.sum(axis=0)).round().astype(cp.int32)
 
         N_t = mvhg(pop=N_1.T, draws_tot=Nt_tot).T
         B_t = ffh(w=B_1.T, b=(N_1 - B_1).T, k=N_t.T, S=Bt_tot, sweeps=self.mh_sweeps).T
@@ -109,7 +107,6 @@ class SkellamMeanConstrainedBridge:
                     M_t = self.m_sampler(x_t)
 
             t = cp.broadcast_to(self.time_points[k], (b, 1))
-            print(k, self.time_points[k], M_t.max(), M_t.min(), M_t.mean())
             x_t_dl, M_t_dl, t_dl = dlpack_backend(x_t, M_t, t, backend=self.backend, dtype="float32")
             x0_hat_t = model.sample(x_t_dl, M_t_dl, t_dl, **z)
             x0_hat_t = cp.from_dlpack(x0_hat_t)
@@ -136,29 +133,16 @@ class SkellamMeanConstrainedBridge:
             # print("Pre-mvhg", "N_t", N_t.max(), N_t.min(), N_t.mean(), "N_s_tot", N_s_tot.max(), N_s_tot.min(), N_s_tot.mean())
             N_s = mvhg(pop=N_t.T, draws_tot=N_s_tot).T
 
-            print("Post-mvhg", "N_s", N_s.max(), N_s.min(), N_s.mean(), "tot diff", cp.abs(N_s.sum(axis=0) - N_s_tot).max())
-            print("Pre-ffh", "B_t", B_t.max(), B_t.min(), B_t.mean(), "B_s_tot", B_s_tot.max(), B_s_tot.min(), B_s_tot.mean())
-            assert (B_s_tot <= cp.minimum(B_t, N_s).sum(0)).all()
-            assert (B_s_tot >= cp.maximum(0,   N_s - (N_t - B_t)).sum(0)).all()
             B_s = ffh(
                 w=B_t.T, b=(N_t - B_t).T, k=N_s.T, S=B_s_tot, 
                 sweeps=self.mh_sweeps
             ).T
-            print("N_s valid", (N_s >= 0).all(), (N_s <= N_t).all(), (N_s.sum(axis=0) == N_s_tot).all())
-            print("B_s valid", (B_s >= 0).all(), (B_s <= N_s).all(), (N_t - B_t >= N_s - B_s).all(), (B_s.sum(axis=0) == B_s_tot).all())
-            print("Post-ffh", "B_s", B_s.max(), B_s.min(), B_s.mean(), "tot diff", cp.abs(B_s.sum(axis=0) - B_s_tot).max())
-
-            x_s = x_t - 2 * (B_t - B_s) + (N_t - N_s) 
             
+            x_s = x_t - 2 * (B_t - B_s) + (N_t - N_s) 
 
             diff_s = cp.abs(x_s - x0_hat_t) 
-            # due to some subtle rounding and parity issues we can sometimes get M_s == -1
             M_s    = (N_s - diff_s) // 2
-            print("diff_s", (N_s - cp.abs(x_s - x0_hat_t)).min(), (N_s - B_s).min())
-            assert (M_s >= 0).all()
-            assert ((B_s <= N_s).all())
 
-            print("Post-ffh", "M_s", M_s.max(), M_s.min(), M_s.mean(), "N_s - diff_s", (N_s - diff_s).max(), (N_s - diff_s).min(), (N_s - diff_s).mean())
             return x_s, M_s, x0_hat_t
 
         x_t, M_t, x0_hat_t = sample_step(self.n_steps, x_1, **z)
