@@ -1,5 +1,5 @@
 # Energy Score Model Configuration
-_target_: models.EnergyScorePosterior
+_target_: models.energy.EnergyScorePosterior
 
 # Model architecture
 x_dim: ${data_dim}

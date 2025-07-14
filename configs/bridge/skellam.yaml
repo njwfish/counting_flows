@@ -4,18 +4,10 @@ _target_: bridges.cupy.skellam.SkellamBridge
 # Bridge parameters
 n_steps: ${n_steps}
 schedule_type: "linear"
-homogeneous_time: false
+homogeneous_time: true
 
 # M-sampler configuration
 m_sampler:
   _target_: bridges.cupy.m_samplers.PoissonM
-  lam_p: 5.0
-  lam_m: 5.0
-
-# Schedule parameters (for different schedule types)
-schedule_kwargs:
-  decay_rate: 0.1
-  steepness: 1.0
-  midpoint: 0.5
-  power: 2.0
-  concentration: 1.0 
+  lam_p: 8.0
+  lam_m: 8.0
