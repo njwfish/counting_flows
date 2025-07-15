@@ -257,7 +257,7 @@ class ARDigitTransformer(nn.Module):
         # Get final sampled digits by running one more forward pass
         final_logits = self.forward(x, prev_digits, M_t, t, z)  # (B, D, L, base+2)
         final_sampled = torch.argmax(final_logits, dim=-1)  # (B, D, L)
-        
-        return self._digit_sequence_to_int(final_sampled) + x
+
+        return (self._digit_sequence_to_int(final_sampled) + x).float()
 
     

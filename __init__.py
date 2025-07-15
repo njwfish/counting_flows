@@ -30,7 +30,7 @@ __description__ = "Count-based Flow Matching with GPU Bridges"
 # Main components for easy import
 __all__ = [
     # Core components
-    "EnergyScorePosterior",
+    "EnergyScorePosterior", 
     "PoissonMixtureDataset", 
     "CountFlowTrainer",
     

@@ -260,8 +260,8 @@ def plot_bridge_marginals(x0_batch: torch.Tensor, x1_batch: torch.Tensor,
     
     for t_val in times:
         # Sample from bridge at this time point
-        x0_sample = x0_batch.cuda()
-        x1_sample = x1_batch.cuda()
+        x0_sample = torch.tensor(x0_batch).cuda()
+        x1_sample = torch.tensor(x1_batch).cuda()
         
         # Sample from bridge 
         x_t, M_t, _ = bridge(x0_sample, x1_sample, t_target=t_val)
@@ -291,8 +291,8 @@ def plot_bridge_marginals(x0_batch: torch.Tensor, x1_batch: torch.Tensor,
         ax.plot(times, traj_median, 'r-', linewidth=3, label='Median x_t')
         
         # Plot target mean as reference
-        target_mean = x0_batch[:, dim].cpu().numpy().mean()
-        x1_mean = x1_batch[:, dim].cpu().numpy().mean()
+        target_mean = x0_batch[:, dim].mean()
+        x1_mean = x1_batch[:, dim].mean()
         ax.axhline(y=target_mean, color='green', linestyle='--', linewidth=2, label='Target x₀ mean')
         ax.axhline(y=x1_mean, color='orange', linestyle='--', linewidth=2, label='x₁ mean')
         
@@ -308,8 +308,8 @@ def plot_bridge_marginals(x0_batch: torch.Tensor, x1_batch: torch.Tensor,
         ax = axes[1, dim]
         
         # Plot linear interpolation between x0 and x1 means
-        target_mean = x0_batch[:, dim].cpu().numpy().mean()
-        x1_mean = x1_batch[:, dim].cpu().numpy().mean()
+        target_mean = x0_batch[:, dim].mean()
+        x1_mean = x1_batch[:, dim].mean()
         linear_interp = (1 - times) * target_mean + times * x1_mean
         
         ax.plot(times, linear_interp, 'purple', linewidth=2, label='Linear interpolation')

@@ -19,4 +19,4 @@ num_workers: 0
 # Logging and checkpointing
 print_every: 10
 save_every: 25
-checkpoint_dir: ${logging.checkpoint_dir}
+# output_dir is now passed automatically by main.py

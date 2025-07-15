@@ -24,16 +24,9 @@ experiment:
   version: "1.0"
   description: "Count-based flow matching with GPU bridges"
 
-# Logging and saving
+# Logging
 logging:
   level: INFO
-  save_checkpoints: true
-  checkpoint_dir: checkpoints
-  log_interval: 1000
 
-# Visualization settings
-visualization:
-  enabled: true
-  plot_interval: 5000
-  save_plots: true
-  plot_dir: plots 
+# Plotting (handled automatically by main.py)
+create_plots: true 

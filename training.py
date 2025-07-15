@@ -6,28 +6,9 @@ Simplified training loop that works with CuPy bridges and normal epochs.
 
 import torch
 from torch.utils.data import DataLoader
-import os
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 import logging
-
-
-def save_model_checkpoint(
-    model: torch.nn.Module, 
-    optimizer: torch.optim.Optimizer, 
-    epoch: int, 
-    losses: list, 
-    checkpoint_dir: Path
-) -> None:
-    """Save model checkpoint"""
-    checkpoint_path = checkpoint_dir / f"model_epoch_{epoch}.pt"
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'epoch': epoch,
-        'losses': losses
-    }, checkpoint_path)
-    logging.info(f"Saved checkpoint: {checkpoint_path}")
 
 
 class CountFlowTrainer:
@@ -46,9 +27,7 @@ class CountFlowTrainer:
         num_workers: int = 0,
         print_every: int = 10,
         save_every: Optional[int] = None,
-        checkpoint_dir: Optional[str] = None,
-        config_hash: Optional[str] = None,
-        original_cwd: Optional[str] = None
+        output_dir: Optional[str] = None
     ):
         """
         Args:
@@ -60,10 +39,8 @@ class CountFlowTrainer:
             shuffle: Whether to shuffle dataset
             num_workers: Number of DataLoader workers
             print_every: Print loss every N epochs
-            save_every: Save checkpoint every N epochs
-            checkpoint_dir: Directory for checkpoints
-            config_hash: Config hash for checkpoint naming
-            original_cwd: Original working directory for checkpoint saving
+            save_every: Save checkpoint every N epochs (None to disable)
+            output_dir: Output directory for checkpoints
         """
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
@@ -74,15 +51,11 @@ class CountFlowTrainer:
         self.num_workers = num_workers
         self.print_every = print_every
         self.save_every = save_every
-        self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
-        self.config_hash = config_hash
-        self.original_cwd = Path(original_cwd) if original_cwd else Path.cwd()
+        self.output_dir = Path(output_dir) if output_dir else None
         
-        # Setup checkpoint directory
-        if self.save_every is not None and self.checkpoint_dir is not None:
-            self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        
+        # Training state
         self.losses = []
+        self.start_epoch = 0
         self.optimizer = None
     
     def _create_dataloader(self, dataset):
@@ -95,25 +68,22 @@ class CountFlowTrainer:
             pin_memory=torch.cuda.is_available()
         )
     
-    def _save_config_checkpoint(self, model: torch.nn.Module, epoch: int) -> None:
-        """Save checkpoint using config hash naming"""
-        if self.config_hash is None:
+    def _save_checkpoint(self, model: torch.nn.Module, current_epoch: int) -> None:
+        """Save training checkpoint"""
+        if self.output_dir is None:
             return
-        
-        output_dir = self.original_cwd / "outputs" / self.config_hash
-        output_dir.mkdir(parents=True, exist_ok=True)
-        checkpoint_path = output_dir / "model.pt"
         
         checkpoint = {
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'losses': self.losses,
-            'epoch': epoch,
-            'config_hash': self.config_hash
+            'current_epoch': current_epoch,
+            'total_epochs': self.num_epochs
         }
         
+        checkpoint_path = self.output_dir / "model.pt"
         torch.save(checkpoint, checkpoint_path)
-        logging.info(f"Config checkpoint saved: {checkpoint_path}")
+        logging.info(f"Checkpoint saved: {checkpoint_path}")
     
     def training_step(self, model: torch.nn.Module, bridge: Any, batch: Dict[str, torch.Tensor]) -> float:
         """Execute a single training step"""
@@ -122,15 +92,13 @@ class CountFlowTrainer:
         x_1 = batch['x_1'].to(self.device)  # Target counts  
         z = None  # No conditioning for simple case
         
-        
         # Apply bridge to get diffusion samples
         x_t, M_t, t = bridge(x_0, x_1)
         
         # Training step
         self.optimizer.zero_grad()
-        loss, x0_preds = model.loss(x_0, x_t, M_t, t, z)
+        loss = model.loss(x_0, x_t, M_t, t, z)
         loss.backward()
-        
         self.optimizer.step()
         
         return loss.item()
@@ -159,33 +127,27 @@ class CountFlowTrainer:
             model: Neural network model
             bridge: CuPy bridge for diffusion process
             dataset: PyTorch dataset
-            num_epochs: Number of training epochs
         
         Returns:
             Trained model and list of losses
         """
         # Setup model and optimizer
         model = model.to(self.device)
-        self.optimizer = torch.optim.Adam(
-            model.parameters(),
-            lr=self.learning_rate,
-            weight_decay=self.weight_decay
-        )
+        if self.optimizer is None:
+            self.optimizer = torch.optim.Adam(
+                model.parameters(),
+                lr=self.learning_rate,
+                weight_decay=self.weight_decay
+            )
         
         # Create dataloader from dataset
         dataloader = self._create_dataloader(dataset)
         
-        logging.info(f"Starting training for {self.num_epochs} epochs...")
-        logging.info(f"Device: {self.device}")
+        logging.info(f"Training from epoch {self.start_epoch + 1} to {self.num_epochs}")
+        logging.info(f"Device: {self.device}, Batch size: {self.batch_size}")
         logging.info(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-        logging.info(f"Dataset size: {len(dataset)} samples")
-        logging.info(f"Batch size: {self.batch_size}")
-        logging.info(f"Batches per epoch: {len(dataloader)}")
-        if hasattr(dataset, 'k'):
-            logging.info(f"Mixture components: {dataset.k}")
-            logging.info(f"Lambda scale: {dataset.lambda_scale}")
         
-        for epoch in range(self.num_epochs):
+        for epoch in range(self.start_epoch, self.num_epochs):
             model.train()
             epoch_loss = self.train_epoch(model, bridge, dataloader)
             
@@ -193,21 +155,13 @@ class CountFlowTrainer:
             if (epoch + 1) % self.print_every == 0:
                 logging.info(f"Epoch {epoch + 1:3d}/{self.num_epochs}: avg loss = {epoch_loss:.4f}")
             
-            # Save checkpoint if enabled and config_hash is provided
+            # Save checkpoint periodically
             if (self.save_every is not None and 
-                self.config_hash is not None and 
                 (epoch + 1) % self.save_every == 0):
-                self._save_config_checkpoint(model, epoch + 1)
+                self._save_checkpoint(model, epoch + 1)
         
-        # Save final checkpoint with config_hash if available
-        if self.config_hash is not None:
-            self._save_config_checkpoint(model, self.num_epochs)
-        elif self.save_every is not None and self.checkpoint_dir is not None:
-            # Fallback to old checkpoint system
-            save_model_checkpoint(
-                model, self.optimizer, self.num_epochs, 
-                self.losses, self.checkpoint_dir
-            )
+        # Save final checkpoint
+        self._save_checkpoint(model, self.num_epochs)
         
         logging.info("Training completed!")
         return model, self.losses 

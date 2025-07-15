@@ -1,20 +1,15 @@
 """
 Clean Hydra-based Main Script for Count-based Flow Matching
 
-Uses Hydra configuration system to coordinate training with GPU bridges and epochs.
+Simple orchestration of training, evaluation, and visualization.
 """
 
 import torch
-import cupy as cp
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import logging
 from pathlib import Path
 import numpy as np
-import os
-import hashlib
-import json
-from typing import Any
 
 # Capture original working directory before Hydra changes it
 ORIGINAL_CWD = Path.cwd().resolve()
@@ -23,46 +18,38 @@ from visualization import plot_loss_curve, plot_bridge_marginals, plot_model_sam
 from eval import generate_evaluation_data, compute_evaluation_metrics, log_evaluation_summary
 
 
-def setup_logging(level: str = "INFO") -> None:
-    """Setup logging configuration"""
+def setup_environment(cfg: DictConfig) -> str:
+    """Setup logging, seeds, and device"""
     logging.basicConfig(
-        level=getattr(logging, level.upper()),
+        level=getattr(logging, cfg.logging.level.upper()),
         format='%(asctime)s - %(levelname)s - %(message)s',
         datefmt='%H:%M:%S'
     )
-
-
-def setup_device(device_config: str) -> str:
-    """Setup compute device"""
-    if device_config == "auto":
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    else:
-        device = device_config
+    
+    # Set random seeds
+    torch.manual_seed(cfg.seed)
+    np.random.seed(cfg.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(cfg.seed)
+    
+    # Setup device
+    device = "cuda" if cfg.device == "auto" and torch.cuda.is_available() else cfg.device
+    if device == "cuda" and not torch.cuda.is_available():
+        device = "cpu"
+        logging.warning("CUDA requested but not available, falling back to CPU")
     
     logging.info(f"Using device: {device}")
-    
-    if device == "cuda" and not torch.cuda.is_available():
-        logging.warning("CUDA requested but not available, falling back to CPU")
-        device = "cpu"
-    
     return device
 
 
-def set_random_seeds(seed: int) -> None:
-    """Set random seeds for reproducibility"""
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-
-
-def create_config_hash(cfg: DictConfig) -> str:
-    """Create a hash from config excluding training parameters"""
-    # Create a copy and remove training-specific parameters
-    config_copy = OmegaConf.to_container(cfg, resolve=True)
+def get_checkpoint_info(cfg: DictConfig) -> tuple:
+    """Get checkpoint path and load if exists"""
+    from pathlib import Path
+    import hashlib
+    import json
     
-    # Remove training parameters that shouldn't affect model identity
+    # Create config hash (excluding training params)
+    config_copy = OmegaConf.to_container(cfg, resolve=True)
     training_params = [
         'num_epochs', 'learning_rate', 'weight_decay', 'batch_size', 
         'print_every', 'save_every', 'checkpoint_dir', 'create_plots',
@@ -70,336 +57,149 @@ def create_config_hash(cfg: DictConfig) -> str:
         'shuffle', 'num_workers'
     ]
     
-    # Remove training params from trainer config
     if 'trainer' in config_copy:
         for param in training_params:
             config_copy['trainer'].pop(param, None)
-    
-    # Remove top-level training params
     for param in training_params:
         config_copy.pop(param, None)
     
-    # Create hash from remaining config
     config_str = json.dumps(config_copy, sort_keys=True)
-    return hashlib.md5(config_str.encode()).hexdigest()[:12]  # Use first 12 chars
-
-
-def get_output_dir(config_hash: str, original_cwd: Path = None) -> Path:
-    """Get output directory for a given config hash"""
-    # Use original working directory to ensure outputs are saved outside hydra outputs dir
-    if original_cwd is None:
-        original_cwd = Path.cwd()
+    config_hash = hashlib.md5(config_str.encode()).hexdigest()[:12]
     
-    output_dir = original_cwd / "outputs" / config_hash
+    # Setup output directory
+    output_dir = ORIGINAL_CWD / "outputs" / config_hash
     output_dir.mkdir(parents=True, exist_ok=True)
-    return output_dir
-
-
-def load_checkpoint(config_hash: str, original_cwd: Path) -> dict:
-    """Load checkpoint if it exists"""
-    output_dir = get_output_dir(config_hash, original_cwd)
-    checkpoint_path = output_dir / "model.pt"
     
+    # Save config
+    config_path = output_dir / "config.yaml"
+    if not config_path.exists():
+        with open(config_path, 'w') as f:
+            f.write(OmegaConf.to_yaml(cfg))
+    
+    # Check for checkpoint
+    checkpoint_path = output_dir / "model.pt"
+    checkpoint = None
     if checkpoint_path.exists():
-        logging.info(f"Loading checkpoint from: {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
-        return checkpoint
-    return None
+        logging.info(f"Found checkpoint: {checkpoint_path}")
+    
+    return output_dir, checkpoint
+
+
+def is_training_complete(checkpoint: dict, total_epochs: int) -> bool:
+    """Check if training is complete based on saved epoch info"""
+    if not checkpoint:
+        return False
+    
+    current_epoch = checkpoint.get('current_epoch', 0)
+    return current_epoch >= total_epochs
 
 
 def save_checkpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, 
-                   losses: list, cfg: DictConfig, config_hash: str, original_cwd: Path) -> None:
-    """Save checkpoint with config hash"""
-    output_dir = get_output_dir(config_hash, original_cwd)
-    checkpoint_path = output_dir / "model.pt"
-    
+                   losses: list, current_epoch: int, cfg: DictConfig, output_dir: Path) -> None:
+    """Save training checkpoint"""
     checkpoint = {
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'losses': losses,
-        'config': OmegaConf.to_container(cfg, resolve=True),
-        'config_hash': config_hash
+        'current_epoch': current_epoch,
+        'total_epochs': cfg.training.num_epochs,
+        'config': OmegaConf.to_container(cfg, resolve=True)
     }
     
+    checkpoint_path = output_dir / "model.pt"
     torch.save(checkpoint, checkpoint_path)
-    logging.info(f"Checkpoint saved to: {checkpoint_path}")
-    
-
 
 
 @hydra.main(version_base=None, config_path="configs", config_name="config")
 def main(cfg: DictConfig) -> None:
-    """
-    Main training function using Hydra configuration
+    """Main function - simple orchestration"""
     
-    Args:
-        cfg: Hydra configuration object
-    """
-    # Setup logging
-    setup_logging(cfg.logging.level)
+    # Setup environment
+    device = setup_environment(cfg)
     
-    # Set random seeds
-    set_random_seeds(cfg.seed)
+    # Get checkpoint info
+    output_dir, checkpoint = get_checkpoint_info(cfg)
     
-    # Setup device
-    device = setup_device(cfg.device)
+    # Check if training is complete
+    training_complete = is_training_complete(checkpoint, cfg.training.num_epochs)
     
-    # Log experiment details
-    logging.info("=" * 60)
-    logging.info("Count-based Flow Matching with GPU Bridges")
-    logging.info("=" * 60)
+    # Instantiate everything
+    bridge = hydra.utils.instantiate(cfg.bridge)
+    dataset = hydra.utils.instantiate(cfg.dataset)
+    model = hydra.utils.instantiate(cfg.model)
+    
     logging.info(f"Experiment: {cfg.experiment.name}")
-    logging.info(f"Description: {cfg.experiment.description}")
-    logging.info(f"Data dimension: {cfg.data_dim}")
-    logging.info(f"Diffusion steps: {cfg.n_steps}")
-    logging.info(f"Device: {device}")
+    logging.info(f"Model: {type(model).__name__} ({sum(p.numel() for p in model.parameters()):,} params)")
+    logging.info(f"Dataset: {len(dataset)} samples, {dataset.d}D")
     
-    # Create config hash for checkpointing
-    config_hash = create_config_hash(cfg)
-    output_dir = get_output_dir(config_hash, ORIGINAL_CWD)
-    logging.info(f"Config hash: {config_hash}")
-    logging.info(f"Output directory: {output_dir}")
-    
-    # Check for existing checkpoint
-    checkpoint = load_checkpoint(config_hash, ORIGINAL_CWD)
-    if checkpoint:
-        logging.info("Found existing checkpoint! Loading model...")
+    # Training
+    if not training_complete:
+        logging.info("Starting training...")
+        trainer = hydra.utils.instantiate(cfg.training, output_dir=str(output_dir))
         
-        # Load model and return early if training appears complete
-        model = hydra.utils.instantiate(cfg.model)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        
-        # Simple heuristic: if we have losses for expected number of steps, consider complete
-        expected_steps = cfg.training.num_epochs * (50000 // cfg.training.batch_size)  # Rough estimate
-        if len(checkpoint['losses']) >= expected_steps * 0.9:  # 90% of expected steps
-            logging.info("Model appears to be fully trained. Skipping training.")
-            trained_model = model
-            losses = checkpoint['losses']
-            
-            # Still create visualizations and save final results
-            final_model_path = Path("final_model.pt")
-            torch.save({
-                'model_state_dict': trained_model.state_dict(),
-                'config': OmegaConf.to_container(cfg, resolve=True),
-                'losses': losses,
-                'final_loss': losses[-1] if losses else float('inf')
-            }, final_model_path)
-            logging.info(f"Final model saved to: {final_model_path}")
-            
-            # Skip to visualization
-            skip_training = True
-        else:
-            logging.info("Resuming training from checkpoint...")
-            skip_training = False
-    else:
-        logging.info("No existing checkpoint found. Starting fresh training.")
-        skip_training = False
-    
-    # Log configurations
-    logging.info("\nConfiguration Details:")
-    logging.info(f"Bridge: {cfg.bridge._target_}")
-    logging.info(f"Model: {cfg.model._target_}")
-    logging.info(f"Dataset: {cfg.dataset._target_}")
-    logging.info(f"Trainer: {cfg.training._target_}")
-    logging.info(f"Training epochs: {cfg.training.num_epochs}")
-    
-    # Only proceed with training if not skipping
-    if not skip_training:
-        # Instantiate bridge using Hydra
-        logging.info("\nInstantiating bridge...")
-        bridge = hydra.utils.instantiate(cfg.bridge)
-        logging.info(f"Bridge instantiated: {type(bridge).__name__}")
-        
-        # Instantiate model using Hydra
-        logging.info("\nInstantiating model...")
+        # Load from checkpoint if available
         if checkpoint:
-            model = hydra.utils.instantiate(cfg.model)
             model.load_state_dict(checkpoint['model_state_dict'])
-            logging.info("Model loaded from checkpoint")
-        else:
-            model = hydra.utils.instantiate(cfg.model)
-            logging.info(f"Model instantiated: {type(model).__name__}")
-        logging.info(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-        
-        # Instantiate dataset using Hydra
-        logging.info("\nInstantiating dataset...")
-        dataset = hydra.utils.instantiate(cfg.dataset)
-        logging.info(f"Dataset instantiated: {type(dataset).__name__}")
-        logging.info(f"Dataset size: {len(dataset)} samples")
-        logging.info(f"Data dimension: {dataset.d}")
-        if hasattr(dataset, 'k'):
-            logging.info(f"Mixture components: {dataset.k}")
-            logging.info(f"Lambda scale: {dataset.lambda_scale}")
-        
-        # Instantiate trainer using Hydra
-        logging.info("\nInstantiating trainer...")
-        trainer = hydra.utils.instantiate(cfg.training, config_hash=config_hash, original_cwd=str(ORIGINAL_CWD))
-        logging.info(f"Trainer instantiated: {type(trainer).__name__}")
-        logging.info(f"Batch size: {trainer.batch_size}")
-        
-        # Load optimizer state if resuming
-        if checkpoint:
-            # Need to initialize model on device first
-            device = cfg.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
-            model = model.to(device)
+            trainer.losses = checkpoint['losses']
+            trainer.start_epoch = checkpoint['current_epoch']
             
-            # Create optimizer and load state
-            optimizer = torch.optim.Adam(
+            # Setup optimizer and load its state
+            model = model.to(device)
+            trainer.optimizer = torch.optim.Adam(
                 model.parameters(),
                 lr=cfg.training.learning_rate,
                 weight_decay=cfg.training.weight_decay
             )
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            trainer.optimizer = optimizer
-            trainer.losses = checkpoint['losses']
-            logging.info("Optimizer state loaded from checkpoint")
+            trainer.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            logging.info(f"Resuming from epoch {trainer.start_epoch}")
         
-        # Start training
-        logging.info("\nStarting training...")
-        trained_model, losses = trainer.train(
-            model=model,
-            bridge=bridge,
-            dataset=dataset
-        )
-        
-        # Save checkpoint after training
-        if hasattr(trainer, 'optimizer'):
-            save_checkpoint(trained_model, trainer.optimizer, losses, cfg, config_hash, ORIGINAL_CWD)
+        trained_model, losses = trainer.train(model=model, bridge=bridge, dataset=dataset)
+    else:
+        logging.info("Training already complete, loading model...")
+        model.load_state_dict(checkpoint['model_state_dict'])
+        trained_model = model
+        losses = checkpoint['losses']
     
-    # Save final results (if not already saved)
-    if not skip_training:
-        logging.info("\nSaving final results...")
-        
-        # Save final model
-        final_model_path = Path("final_model.pt")
-        torch.save({
-            'model_state_dict': trained_model.state_dict(),
-            'config': OmegaConf.to_container(cfg, resolve=True),
-            'losses': losses,
-            'final_loss': losses[-1] if losses else float('inf')
-        }, final_model_path)
-        logging.info(f"Final model saved to: {final_model_path}")
-        
-        # Save losses
-        losses_path = Path("training_losses.pt")
-        torch.save(losses, losses_path)
-        logging.info(f"Training losses saved to: {losses_path}")
+    # Save final model
+    final_model_path = Path("final_model.pt")
+    torch.save({
+        'model_state_dict': trained_model.state_dict(),
+        'config': OmegaConf.to_container(cfg, resolve=True),
+        'losses': losses
+    }, final_model_path)
     
-    # Create visualizations if enabled
+    # Evaluation and visualization
     if cfg.get('create_plots', True):
-        logging.info("Creating visualization plots...")
-        plots_dir = output_dir / "plots"
-        plots_dir.mkdir(exist_ok=True)
+        logging.info("Generating evaluation and plots...")
         
+        # Generate evaluation data
+        eval_data = generate_evaluation_data(trained_model, bridge, dataset, n_samples=200)
+        metrics = compute_evaluation_metrics(eval_data)
+        log_evaluation_summary(eval_data, metrics)
+        
+        # Create plots
         plots = {}
-        
-        # Plot training loss
-        if losses:
-            loss_fig = plot_loss_curve(losses, title="Training Loss")
-            plots['training_loss'] = loss_fig
-        
-        # If training was skipped, we need to instantiate dataset and bridge
-        if skip_training:
-            dataset = hydra.utils.instantiate(cfg.dataset)
-            bridge = hydra.utils.instantiate(cfg.bridge)
-            logging.info("Instantiated dataset and bridge for visualization")
-        
-        # Get sample data from dataset
-        batch_size = 100
-        x0_batch = []
-        x1_batch = []
-        
-        for i in range(batch_size):
-            sample = dataset[i % len(dataset)]
-            x0_batch.append(sample['x_0'])
-            x1_batch.append(sample['x_1'])
-        
-        x0_batch = torch.stack(x0_batch)
-        x1_batch = torch.stack(x1_batch)
-        
-        bridge_fig = plot_bridge_marginals(
-            x0_batch=x0_batch,
-            x1_batch=x1_batch,
-            bridge=bridge,
+        plots['training_loss'] = plot_loss_curve(losses, title="Training Loss")
+        plots['bridge_marginals'] = plot_bridge_marginals(
+            x0_batch=eval_data['x0_target'][:100], 
+            x1_batch=eval_data['x1_batch'][:100], 
+            bridge=bridge, 
             title="Bridge Marginals"
         )
-        plots['bridge_marginals'] = bridge_fig
         
-        # Generate and visualize samples from the trained model
-        if not skip_training or checkpoint:
-            logging.info("Generating samples from trained model...")
-            
-            # Generate evaluation data (samples, trajectories, metrics)
-            eval_data = generate_evaluation_data(trained_model, bridge, dataset, n_samples=200)
-            
-            # Compute and log evaluation metrics
-            metrics = compute_evaluation_metrics(eval_data)
-            log_evaluation_summary(eval_data, metrics)
-            
-            # Create plots from evaluation data
-            sample_figs = plot_model_samples(eval_data, title="Generated Samples")
-            
-            # Add both trajectory and distribution plots
-            plots['model_trajectories'] = sample_figs['trajectories']
-            plots['model_distributions'] = sample_figs['distributions']
-
-    # Save all plots
-    if plots:
+        sample_figs = plot_model_samples(eval_data, title="Generated Samples")
+        plots['model_trajectories'] = sample_figs['trajectories']
+        plots['model_distributions'] = sample_figs['distributions']
+        
+        # Save plots
+        plots_dir = output_dir / "plots"
         save_plots(plots, str(plots_dir))
         logging.info(f"Plots saved to: {plots_dir}")
     
-    # Log final statistics
-    if losses:
-        final_loss = losses[-1]
-        avg_last_100 = np.mean(losses[-100:]) if len(losses) >= 100 else np.mean(losses)
-        logging.info(f"\nTraining completed!")
-        logging.info(f"Final loss: {final_loss:.4f}")
-        logging.info(f"Average loss (last 100 steps): {avg_last_100:.4f}")
-        logging.info(f"Total training steps: {len(losses)}")
-    
-    logging.info("=" * 60)
-
-
-def load_and_sample(
-    model_path: str,
-    bridge_config: DictConfig,
-    n_samples: int = 1000,
-    device: str = "cuda"
-) -> tuple:
-    """
-    Load trained model and generate samples
-    
-    Args:
-        model_path: Path to saved model
-        bridge_config: Bridge configuration for sampling
-        n_samples: Number of samples to generate
-        device: Device for computation
-    
-    Returns:
-        Generated samples and model
-    """
-    # Load model and config
-    checkpoint = torch.load(model_path, map_location=device)
-    config = checkpoint['config']
-    
-    # Recreate model
-    model_config = DictConfig(config['model'])
-    model = hydra.utils.instantiate(model_config)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model = model.to(device)
-    model.eval()
-    
-    # Recreate bridge for sampling
-    bridge = hydra.utils.instantiate(bridge_config)
-    
-    logging.info(f"Loaded model from {model_path}")
-    logging.info(f"Model final training loss: {checkpoint.get('final_loss', 'unknown')}")
-    
-    # Generate samples (this would need to be implemented based on your sampling needs)
-    logging.info(f"Generating {n_samples} samples...")
-    # TODO: Implement sampling logic based on your specific requirements
-    
-    return None, model  # Placeholder return
+    # Final summary
+    final_loss = losses[-1] if losses else float('inf')
+    logging.info(f"Training completed! Final loss: {final_loss:.4f}")
 
 
 if __name__ == "__main__":
