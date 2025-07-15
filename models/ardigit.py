@@ -259,3 +259,69 @@ class ARDigitTransformer(nn.Module):
         final_sampled = torch.argmax(final_logits, dim=-1)  # (B, D, L)
 
         return (self._digit_sequence_to_int(final_sampled) + x).float()
+
+class ARDigitTransformerCRPS(ARDigitTransformer):
+    def loss(self,
+             target_ints: torch.Tensor,  # (B,D) true outputs
+             x:           torch.Tensor,  # (B,D) inputs
+             M_t:         torch.Tensor,  # (B,D)
+             t:           torch.Tensor,  # (B,1)
+             z=None
+            ) -> torch.Tensor:
+        """
+        Batch-truncated CRPS under teacher-forcing, fixed gather.
+        """
+        B, D = x.shape
+        device = x.device
+
+        # 1) residuals & digits
+        diffs = (target_ints - x).to(torch.int32)                 # (B,D)
+        tgt_digits = self._int_to_digit_sequence(diffs)          # (B,D,L)
+
+        # 2) teacher-forcing prev_digits
+        prev = torch.full_like(tgt_digits, self.sos_token)       # (B,D,L)
+        prev[...,1:] = tgt_digits[...,:-1]
+
+        # 3) forward → per-digit probs
+        logits = self.forward(x, prev, M_t, t, z)                # (B,D,L,V)
+        B_,D_,L,V = logits.shape
+        probs = F.softmax(logits, dim=-1)                        # (B,D,L,V)
+
+        # 4) flatten batch dims
+        N = B * D
+        diffs_flat = diffs.view(N)                              # (N,)
+        probs_flat = probs.view(N, L, V)                        # (N,L,V)
+
+        # 5) truncation range
+        k_min = int(diffs_flat.min().item())
+        k_max = int(diffs_flat.max().item())
+        K = torch.arange(k_min, k_max+1, device=device)         # (R,)
+
+        # 6) digitize each k once
+        k_seqs = self._int_to_digit_sequence(K.unsqueeze(1))    # (R,1,L)
+        k_seqs = k_seqs.squeeze(1)                              # (R,L)
+
+        # 7) expand & permute for gather
+        #    want idx_gather[n, i, r] = k_seqs[r, i]
+        R = K.size(0)
+        k_exp = k_seqs.unsqueeze(0).expand(N, -1, -1)           # (N,R,L)
+        idx_gather = k_exp.permute(0,2,1)                       # (N,L,R)
+
+        # 8) gather per-digit probabilities
+        #    gather along dim=2 of (N,L,V) with index (N,L,R) → (N,L,R)
+        p_perm = probs_flat.gather(2, idx_gather)               # (N,L,R)
+
+        # 9) reshape back to (N,R,L)
+        p_digs = p_perm.permute(0,2,1)                          # (N,R,L)
+
+        # 10) joint P(k) and CDF
+        Pk = p_digs.prod(dim=2)                                 # (N,R)
+        Fk = torch.cumsum(Pk, dim=1)                            # (N,R)
+
+        # 11) step-function indicator 1{k ≥ true_diff}
+        ind = (torch.arange(k_min, k_max+1, device=device)
+               .unsqueeze(0) >= diffs_flat.unsqueeze(1))        # (N,R)
+
+        # 12) CRPS and average
+        crps = ((Fk - ind.to(Fk.dtype))**2).sum(dim=1)           # (N,)
+        return crps.mean()
