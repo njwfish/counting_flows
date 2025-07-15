@@ -1,5 +1,5 @@
 # ARDigit Model Configuration
-_target_: models.ardigit.ARDigitTransformerDP
+_target_: models.ardigit.ARDigitTransformer
 
 # Model architecture
 x_dim: ${data_dim}
