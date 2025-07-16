@@ -6,12 +6,13 @@ import os
 torch._dynamo.config.optimize_ddp = False
 torch._dynamo.config.suppress_errors = True
 
+USE_COMPILE = False
 try:
 
     if os.environ.get("USE_COMPILE") == "1":
         USE_COMPILE = True
  
-except:
+except Exception as e:
     USE_COMPILE = False
 
 # Try to use torch.compile if available (PyTorch 2.0+)
