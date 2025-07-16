@@ -1,5 +1,6 @@
 import torch
 import os   
+import logging
 
 # Enable JIT compilation for better performance
 # TODO: We are using DDP 
@@ -14,6 +15,10 @@ try:
  
 except Exception as e:
     USE_COMPILE = False
+
+logger = logging.getLogger(__name__)
+
+logger.info(f"Using compile: {USE_COMPILE}")
 
 # Try to use torch.compile if available (PyTorch 2.0+)
 def maybe_compile(func):
