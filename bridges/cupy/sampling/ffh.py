@@ -53,7 +53,7 @@ void ffh_mh_seq_flat(
         int ki = K[  base + i];
         int xi;
         if (ki == 0 || wi == 0) {
-            xi = 0;                         // safe short–circuit
+            xi = 0;                         // safe short circuit
         } else if (bi == 0) {
             xi = ki;                        // entire sample must be white
         } else {
@@ -165,7 +165,7 @@ void ffh_mh_seq_flat(
         // single U for accept
         // float u = rk_double(&st);
 
-        // direct, hypergeometric‐free acceptance ratio in double precision
+        // direct, hypergeometric free acceptance ratio in double precision
         double rri = (double)xi   / (wi - xi + 1)
                   * ((double)(bi - (ki - xi)) / (ki - xi + 1));
         double rrj = (double)(wj - xj) / (xj + 1)
