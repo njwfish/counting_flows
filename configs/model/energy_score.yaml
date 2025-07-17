@@ -1,0 +1,13 @@
+# Energy Score Model Configuration
+_target_: models.energy.EnergyScorePosterior
+
+# Model architecture
+x_dim: ${data_dim}
+context_dim: 0  # No conditioning for simplified approach
+hidden: 64
+noise_dim: 16
+
+# Energy score parameters
+sigma: 1.0
+m_samples: 16
+lambda_energy: 1.0

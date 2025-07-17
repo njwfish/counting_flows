@@ -1,132 +1,167 @@
 """
-Training Functions for Count-based Flow Matching
+Clean Training Functions for Count-based Flow Matching with GPU Bridges
 
-Provides training loop and utilities for count-based flow matching models.
+Simplified training loop that works with CuPy bridges and normal epochs.
 """
 
 import torch
-import os
+from torch.utils.data import DataLoader
 from pathlib import Path
-from .datasets import create_dataloader, InfiniteDataLoader
+from typing import Dict, Any, Optional, Tuple
+import logging
 
 
-def save_model_checkpoint(model, optimizer, step, losses, checkpoint_dir):
-    """Save model checkpoint"""
-    checkpoint_path = checkpoint_dir / f"model_step_{step}.pt"
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'step': step,
-        'losses': losses
-    }, checkpoint_path)
-    print(f"  Saved checkpoint: {checkpoint_path}")
-
-
-def train_model(
-    model, dataloader, 
-    num_iterations=10000, print_interval=2000,
-    lr=2e-3, device="cuda", save_every=None, checkpoint_dir=None
-):
+class CountFlowTrainer:
     """
-    Unified training function for count-based flow matching models using DataLoaders
-    
-    Args:
-        model: Neural network model (any BaseCountModel subclass)
-        dataloader: PyTorch DataLoader providing training batches
-        num_iterations: Number of training iterations
-        lr: Learning rate
-        device: Device for computation
-        save_every: Save model every N steps (None to disable saving)
-        checkpoint_dir: Directory to save checkpoints
-    
-    Returns:
-        model: Trained model
-        losses: List of training losses
+    Clean trainer for count-based flow matching with GPU bridges
     """
-    model = model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     
-    # Setup checkpoint directory if saving is enabled
-    if save_every is not None and checkpoint_dir is not None:
-        Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
-    
-    # Make dataloader infinite for training
-    infinite_loader = InfiniteDataLoader(dataloader)
-    
-    losses = []
-    interval_losses = []
-    
-    for step in range(num_iterations):
-        # Get batch from dataloader
-        batch = next(infinite_loader)
+    def __init__(
+        self,
+        learning_rate: float = 1e-3,
+        weight_decay: float = 0.0,
+        num_epochs: int = 100,
+        device: str = "cuda",
+        batch_size: int = 128,
+        shuffle: bool = True,
+        num_workers: int = 0,
+        print_every: int = 10,
+        save_every: Optional[int] = None,
+        output_dir: Optional[str] = None
+    ):
+        """
+        Args:
+            learning_rate: Learning rate for optimizer
+            weight_decay: Weight decay for optimizer
+            num_epochs: Number of training epochs
+            device: Device for model computation
+            batch_size: Batch size for DataLoader
+            shuffle: Whether to shuffle dataset
+            num_workers: Number of DataLoader workers
+            print_every: Print loss every N epochs
+            save_every: Save checkpoint every N epochs (None to disable)
+            output_dir: Output directory for checkpoints
+        """
+        self.learning_rate = learning_rate
+        self.weight_decay = weight_decay
+        self.num_epochs = num_epochs
+        self.device = device
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.num_workers = num_workers
+        self.print_every = print_every
+        self.save_every = save_every
+        self.output_dir = Path(output_dir) if output_dir else None
         
-        # Move to device
-        x0 = batch['x0'].to(device)
-        x1 = batch['x1'].to(device)
-        x_t = batch['x_t'].to(device) 
-        M_t = batch['M'].to(device)
-        z = batch['z'].to(device)
-        t = batch['t'].to(device).unsqueeze(-1)  # Add dimension for broadcasting
-
+        # Training state
+        self.losses = []
+        self.start_epoch = 0
+        self.optimizer = None
+    
+    def _create_dataloader(self, dataset):
+        """Create DataLoader from dataset"""
+        return DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=self.shuffle,
+            num_workers=self.num_workers,
+            pin_memory=torch.cuda.is_available()
+        )
+    
+    def _save_checkpoint(self, model: torch.nn.Module, current_epoch: int) -> None:
+        """Save training checkpoint"""
+        if self.output_dir is None:
+            return
+        
+        checkpoint = {
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'losses': self.losses,
+            'current_epoch': current_epoch,
+            'total_epochs': self.num_epochs
+        }
+        
+        checkpoint_path = self.output_dir / "model.pt"
+        torch.save(checkpoint, checkpoint_path)
+        logging.info(f"Checkpoint saved: {checkpoint_path}")
+    
+    def training_step(self, model: torch.nn.Module, bridge: Any, batch: Dict[str, torch.Tensor]) -> float:
+        """Execute a single training step"""
+        # Extract data from batch
+        x_0 = batch['x_0'].to(self.device)  # Source counts
+        x_1 = batch['x_1'].to(self.device)  # Target counts  
+        z = None  # No conditioning for simple case
+        
+        # Apply bridge to get diffusion samples
+        x_t, M_t, t = bridge(x_0, x_1)
+        
         # Training step
-        optimizer.zero_grad()
-        loss, x0_preds = model.loss(x0, x_t, M_t, z, t)
+        self.optimizer.zero_grad()
+        loss = model.loss(x_0, x_t, M_t, t, z)
         loss.backward()
-        optimizer.step()
-
-        current_loss = loss.item()
-        losses.append(current_loss)
-        interval_losses.append(current_loss)
+        self.optimizer.step()
         
-        # Save checkpoint if enabled
-        if save_every is not None and checkpoint_dir is not None and (step + 1) % save_every == 0:
-            save_model_checkpoint(model, optimizer, step + 1, losses, Path(checkpoint_dir))
+        return loss.item()
+    
+    def train_epoch(self, model: torch.nn.Module, bridge: Any, dataloader: DataLoader) -> float:
+        """Train for one epoch"""
+        epoch_losses = []
         
-        # Print average loss over interval
-        if step % print_interval == 0 and step > 0:
-            avg_loss = sum(interval_losses) / len(interval_losses)
-            print(f"  Step {step:5d}: avg loss = {avg_loss:.4f} (last {len(interval_losses)} steps)")
-            interval_losses = []
-        elif step == 0:
-            print(f"  Step {step:5d}: loss = {current_loss:.4f}")
+        for batch in dataloader:
+            batch_loss = self.training_step(model, bridge, batch)
+            epoch_losses.append(batch_loss)
+            self.losses.append(batch_loss)
+        
+        return sum(epoch_losses) / len(epoch_losses)
     
-    # Save final checkpoint if enabled
-    if save_every is not None and checkpoint_dir is not None:
-        save_model_checkpoint(model, optimizer, num_iterations, losses, Path(checkpoint_dir))
-    
-    # Print final average if there are remaining losses
-    if interval_losses:
-        avg_loss = sum(interval_losses) / len(interval_losses)
-        print(f"  Final:     avg loss = {avg_loss:.4f} (last {len(interval_losses)} steps)")
-    else:
-        print(f"  Final:     loss = {losses[-1]:.4f}")
-    
-    return model, losses
-
-
-def create_training_dataloader(bridge_type, dataset_type, batch_size, d, n_steps, 
-                             dataset_size=10000, **kwargs):
-    """
-    Convenience function to create a training DataLoader
-    
-    Args:
-        bridge_type: "poisson" or "nb"
-        dataset_type: "constant_poisson", "random_poisson", or "complex_nb"
-        batch_size: Batch size
-        d: Count vector dimensionality
-        n_steps: Number of diffusion steps
-        dataset_size: Size of dataset per epoch
-        **kwargs: Additional arguments passed to dataset
-    
-    Returns:
-        DataLoader for training, Dataset instance
-    """
-    return create_dataloader(
-        bridge_type=bridge_type,
-        dataset_type=dataset_type,
-        batch_size=batch_size,
-        size=dataset_size,
-        d=d,
-        n_steps=n_steps,
-        **kwargs
-    ) 
+    def train(
+        self,
+        model: torch.nn.Module,
+        bridge: Any,
+        dataset: Any,
+    ) -> Tuple[torch.nn.Module, list]:
+        """
+        Main training loop
+        
+        Args:
+            model: Neural network model
+            bridge: CuPy bridge for diffusion process
+            dataset: PyTorch dataset
+        
+        Returns:
+            Trained model and list of losses
+        """
+        # Setup model and optimizer
+        model = model.to(self.device)
+        if self.optimizer is None:
+            self.optimizer = torch.optim.Adam(
+                model.parameters(),
+                lr=self.learning_rate,
+                weight_decay=self.weight_decay
+            )
+        
+        # Create dataloader from dataset
+        dataloader = self._create_dataloader(dataset)
+        
+        logging.info(f"Training from epoch {self.start_epoch + 1} to {self.num_epochs}")
+        logging.info(f"Device: {self.device}, Batch size: {self.batch_size}")
+        logging.info(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+        
+        for epoch in range(self.start_epoch, self.num_epochs):
+            model.train()
+            epoch_loss = self.train_epoch(model, bridge, dataloader)
+            
+            # Print progress
+            if (epoch + 1) % self.print_every == 0:
+                logging.info(f"Epoch {epoch + 1:3d}/{self.num_epochs}: avg loss = {epoch_loss:.4f}")
+            
+            # Save checkpoint periodically
+            if (self.save_every is not None and 
+                (epoch + 1) % self.save_every == 0):
+                self._save_checkpoint(model, epoch + 1)
+        
+        # Save final checkpoint
+        self._save_checkpoint(model, self.num_epochs)
+        
+        logging.info("Training completed!")
+        return model, self.losses 

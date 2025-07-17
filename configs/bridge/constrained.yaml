@@ -1,0 +1,14 @@
+# Constrained Skellam Bridge Configuration
+_target_: bridges.cupy.constrained.SkellamMeanConstrainedBridge
+
+# Bridge parameters
+n_steps: ${n_steps}
+schedule_type: "linear"
+homogeneous_time: true
+mh_sweeps: 1000
+
+# M-sampler configuration
+m_sampler:
+  _target_: bridges.cupy.m_samplers.PoissonM
+  lam_p: 8.0
+  lam_m: 8.0

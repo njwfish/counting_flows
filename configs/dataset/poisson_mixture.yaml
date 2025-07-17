@@ -1,0 +1,10 @@
+# Poisson Mixture Dataset Configuration
+_target_: datasets.PoissonMixtureDataset
+
+# Dataset parameters
+size: 50000  # total samples in dataset (pre-sampled for speed)
+d: ${data_dim}
+
+# Mixture parameters
+k: 3  # number of mixture components
+lambda_scale: 10.0  # scale for sampling lambda parameters

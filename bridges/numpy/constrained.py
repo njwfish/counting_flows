@@ -1,9 +1,9 @@
 import numpy as np
 import torch
-from .scheduling import make_time_spacing_schedule, make_lambda_schedule
-from ...sampling.hypergeom import hypergeometric_numpy
-from ...sampling.mean_constrained import mh_mean_constrained_update_numpy
-from ...sampling.distribute_shift_numpy import get_proportional_weighted_dist, sample_pert
+# from .scheduling import make_time_spacing_schedule, make_lambda_schedule
+# from ...sampling.hypergeom import hypergeometric_numpy
+# from ...sampling.mean_constrained import mh_mean_constrained_update_numpy
+# from ...sampling.distribute_shift_numpy import get_proportional_weighted_dist, sample_pert
 
 class SkellamMeanConstrainedBridge:
     """
@@ -141,7 +141,10 @@ class SkellamMeanConstrainedBridge:
             "t"    : t,          
             "M_t"  : M_t,
             "N_t"  : N_t,
-            "B_t"  : B_t
+            "B_t"  : B_t,
+            "N"    : N,
+            "B1"   : B1,
+            "M"    : M
         }
 
     def reverse_sampler(

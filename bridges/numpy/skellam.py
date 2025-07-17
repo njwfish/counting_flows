@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 from .scheduling import make_time_spacing_schedule, make_lambda_schedule
-from ...sampling.hypergeom import hypergeometric
+# from ...sampling.hypergeom import hypergeometric
 
 
 class SkellamBridge:

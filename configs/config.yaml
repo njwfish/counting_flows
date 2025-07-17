@@ -1,0 +1,32 @@
+defaults:
+  - bridge: skellam
+  - model: energy_score
+  - dataset: poisson_mixture
+  - training: default
+  - _self_
+
+# Hydra configuration
+hydra:
+  job:
+    chdir: true
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+# Global settings
+device: cuda
+seed: 42
+data_dim: 4
+n_steps: 30
+
+# Experiment settings
+experiment:
+  name: "counting_flows_experiment"
+  version: "1.0"
+  description: "Count-based flow matching with GPU bridges"
+
+# Logging
+logging:
+  level: INFO
+
+# Plotting (handled automatically by main.py)
+create_plots: true 

@@ -1,15 +1,3 @@
-"""
-Neural Network Models for Count-based Flow Matching
-
-Provides different neural architectures for predicting count distributions:
-- NBPosterior: Negative Binomial parameters (r, p)
-- BetaBinomialPosterior: Beta-Binomial parameters (n, alpha, beta)  
-- MLERegressor: Direct count prediction via log(1 + x₀)
-- ZeroInflatedPoissonPosterior: Zero-Inflated Poisson parameters (λ, π)
-- IQNPosterior: Implicit Quantile Networks for count prediction
-- MMDPosterior: Maximum Mean Discrepancy with L2 kernel
-"""
-
 import torch
 import torch.nn as nn
 
@@ -21,7 +9,7 @@ class EnergyScorePosterior(nn.Module):
     def __init__(
         self,
         x_dim: int,
-        context_dim: int,
+        context_dim: int = 0,
         hidden: int = 128,
         noise_dim: int = None,
         sigma: float = 1.0,
@@ -54,14 +42,8 @@ class EnergyScorePosterior(nn.Module):
             nn.Linear(hidden, x_dim),
         )
 
-    @property
-    def output_dim(self):
-        return self.x_dim
 
-    def process_output(self, h):
-        return h
-
-    def forward(self, x_t, M_t, z, t, noise=None):
+    def forward(self, x_t, M_t, t, z=None, noise=None):
         """
         x_t: [B, x_dim]
         z:   [B, context_dim]
@@ -83,21 +65,23 @@ class EnergyScorePosterior(nn.Module):
             raise ValueError(f"t must be [B] or [B,1], got {tuple(t.shape)}")
 
         # concat everything
-        inp = torch.cat([x_t.float(), t_col.float(), z.float(), M_t.float(), noise], dim=-1)
+        if z is not None:
+            inp = torch.cat([x_t.float(), t_col.float(), z.float(), M_t.float(), noise], dim=-1)
+        else:
+            inp = torch.cat([x_t.float(), t_col.float(), M_t.float(), noise], dim=-1)
 
         # sanity check
         assert inp.shape[1] == self._in_dim, (
             f"got inp dim={inp.shape[1]}, expected {self._in_dim}"
         )
-
         # predict Δx, add to x_t
         return self.net(inp) + x_t
 
-    def sample(self, x_t, M_t, z, t, use_mean=False):
-        x0_hat = self.forward(x_t, M_t, z, t)
+    def sample(self, x_t, M_t, t, z=None):
+        x0_hat = self.forward(x_t, M_t, t, z)
         return x0_hat.round().long()
 
-    def loss(self, x0_true, x_t, M_t, z, t):
+    def loss(self, x0_true, x_t, M_t, t, z=None):
         """
         Empirical energy-score (Distrib. Diffusion Models eq.14):
           L = mean_i [
@@ -109,7 +93,7 @@ class EnergyScorePosterior(nn.Module):
 
         # replicate each input m times 
         x_t_rep = x_t.unsqueeze(1).expand(-1, m, -1).reshape(n * m, -1)
-        z_rep   =   z.unsqueeze(1).expand(-1, m, -1).reshape(n * m, -1)
+        z_rep   =   z.unsqueeze(1).expand(-1, m, -1).reshape(n * m, -1) if z is not None else None
         M_t_rep = M_t.unsqueeze(1).expand(-1, m, -1).reshape(n * m, -1)
         # flatten t to 1D so forward() will turn it into [n*m,1] (for t)
         if t.dim() == 2 and t.shape[1] == 1:
@@ -123,7 +107,7 @@ class EnergyScorePosterior(nn.Module):
         noise = torch.randn(n * m, self.noise_dim, device=x_t.device)
 
         # get all x̂ preds: [n*m, x_dim] → view [n, m, x_dim] (for x0_preds)
-        x0_preds = self.forward(x_t_rep, M_t_rep, z_rep, t_rep, noise)
+        x0_preds = self.forward(x_t_rep, M_t_rep, t_rep, z_rep, noise)
         x0_preds = x0_preds.view(n, m, -1)  # [n, m, d]
 
         # confinement
@@ -135,5 +119,4 @@ class EnergyScorePosterior(nn.Module):
         mean_pd   = pdists.mean(dim=1)                                # [n]
         term_int  = (λ / 2.0) * mean_pd                               # [n]
 
-        return (term_conf - term_int).mean(), x0_preds.mean(dim=1)
-
+        return (term_conf - term_int).mean()
