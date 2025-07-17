@@ -72,6 +72,6 @@ def mvhg(pop, draws_tot):
         (D,), (1,),
         (pop32.ravel(), B, draws32, seed, out.ravel())
     )
-    cp.cuda.Stream.null.synchronize()
+    # cp.cuda.Stream.null.synchronize()
     return out
 

@@ -232,9 +232,9 @@ def ffh(w, b, k, S, sweeps=48, seed=None):
         (Wf, Bf, Kf, Sf, Bdim, sweeps, seed, Xf),
         shared_mem=shared_bytes
     )
-    cp.cuda.Stream.null.synchronize()
+    # cp.cuda.Stream.null.synchronize()
     # return Xf.reshape(D, Bdim)
     # ffh_mh_flat((D,), (1,),
     #             (Wf, Bf, Kf, Sf, Bdim, sweeps, seed, Xf))
-    # cp.cuda.Stream.null.synchronize()
+    # 
     return Xf.reshape(D, Bdim)
