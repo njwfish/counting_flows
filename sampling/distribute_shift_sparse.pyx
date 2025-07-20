@@ -1,11 +1,73 @@
 # cython: boundscheck=False, wraparound=False, cdivision=True, language_level=3
+# distutils: language = c++
+# distutils: extra_compile_args = -std=c++11
+
+# Python imports
 import numpy as np
-cimport numpy as np
-from scipy.sparse import csr_matrix
 from numpy.random import default_rng
+from scipy.sparse import csr_matrix, csc_matrix
+
+# Cython imports
+cimport numpy as np
+from cpython.mem cimport PyMem_Malloc, PyMem_Free
+
+# Dtype aliases
 DTYPE = np.int64
 ctypedef np.int64_t DTYPE_t
 ctypedef np.intp_t   INTP_t
+# 32-bit index types
+ctypedef np.int32_t IDX_t
+ctypedef np.int32_t PTR_t
+ctypedef np.float32_t VAL_t
+# single-token alias for unsigned int
+ctypedef unsigned int uint
+
+# Initialize the NumPy C API
+np.import_array()
+
+cdef extern from "multinom.hpp" nogil:
+    void sample_multinomial_c(unsigned int* counts,
+                              int K,
+                              unsigned int n,
+                              const double* probs) noexcept
+
+# Python wrapper for one-off multinomial draws
+def sample_multinomial(unsigned int n,
+                       np.ndarray[np.float64_t, ndim=1] p):
+    """
+    Draw one Multinomial(n, p) sample outside the GIL.
+
+    Args:
+      n : total number of trials (non-negative integer)
+      p : 1D NumPy array of probabilities (length K)
+
+    Returns:
+      counts : 1D NumPy array of dtype uint32 and length K summing to n
+    """
+    cdef int K = p.shape[0]
+    cdef np.ndarray[np.uint32_t, ndim=1] counts_np = np.empty(K, dtype=np.uint32)
+    cdef uint *counts = <uint*>counts_np.data
+    cdef double total = 0.0
+    cdef int i
+    cdef double *probs = NULL
+
+    # Compute total sum
+    for i in range(K):
+        total += p[i]
+    if total <= 0.0:
+        for i in range(K): counts[i] = 0
+        return counts_np
+
+    # Allocate and normalize probability buffer
+    probs = <double*> PyMem_Malloc(K * sizeof(double))
+    for i in range(K): probs[i] = p[i] / total
+
+    # Sample under nogil
+    with nogil:
+        sample_multinomial_c(counts, K, <uint>n, probs)
+
+    PyMem_Free(probs)
+    return counts_np
 
 def adjust_sparse_counts_cython_colwise(object X_csr,
                                         np.ndarray[DTYPE_t, ndim=1] S):
@@ -96,70 +158,92 @@ def adjust_sparse_counts_cython_colwise(object X_csr,
     X_updated = X_csc_updated.tocsr()
     return X_updated
 
-# Keep the original row-wise function for backwards compatibility
-def adjust_sparse_counts_cython(object X_csr,
-                                np.ndarray[DTYPE_t, ndim=1] S):
-    """
-    Original row-wise version for backwards compatibility
-    """
+# Column-wise sparse adjustment using nogil multinomial
+def adjust_sparse_counts_cython_colwise2(object X_csr,
+                                         np.ndarray[DTYPE_t, ndim=1] S):
     cdef:
-        INTP_t[:] indptr  = X_csr.indptr
-        INTP_t[:] indices = X_csr.indices
-        DTYPE_t[:] data   = X_csr.data
-        DTYPE_t[:] Sview  = S
-        Py_ssize_t n      = X_csr.shape[0]
-        Py_ssize_t d      = X_csr.shape[1]
-        Py_ssize_t i, start, end, p_len, j
-        long      D_i
-        double    total_local
-        int       sign
-        np.ndarray[np.float64_t, ndim=1] p
-    # initialize a single RNG
-    rng = default_rng()
-    data_out    = []
-    indices_out = []
-    indptr_out  = [0]
-    for i in range(n):
-        start = indptr[i]
-        end   = indptr[i+1]
-        # compute row sum
-        total_local = 0.0
-        for j in range(start, end):
-            total_local += data[j]
-        D_i = <long>total_local - <long>Sview[i]
-        if D_i != 0:
-            m = abs(D_i)
-            sign = -1 if D_i > 0 else 1
-            p_len = end - start
-            if p_len > 0 and total_local > 0.0:
-                # 1) build a small NumPy view of the row's weights
-                p = np.empty(p_len, dtype=np.float64)
-                for j in range(p_len):
-                    p[j] = data[start + j]
-                p /= p.sum()
-                # 2) call NumPy's multinomial sampler!
-                #    returns a 1‑D array of length p_len
-                s = rng.multinomial(m, p)
-                # 3) record only non‑zero draws
-                for j in range(p_len):
-                    cnt = s[j]
-                    if cnt:
-                        data_out.append(sign * int(cnt))
-                        indices_out.append(indices[start + j])
-            else:
-                # fallback to uniform over all d columns
-                s = rng.multinomial(m, np.ones(d)/d)
-                for j in range(d):
-                    cnt = s[j]
-                    if cnt:
-                        data_out.append(sign * int(cnt))
-                        indices_out.append(j)
-        indptr_out.append(len(data_out))
-    # assemble delta and apply
-    delta = csr_matrix(
-        (data_out, indices_out, indptr_out),
-        shape=(n, d), dtype=DTYPE
+        object                    X_csc, X_csc_upd
+        np.ndarray[DTYPE_t, ndim=1] data_arr, new_data_arr
+        np.ndarray[INTP_t, ndim=1]  indptr_arr, indices_arr
+        DTYPE_t[::1]               data, new_data
+        INTP_t[::1]                indptr, indices
+        Py_ssize_t                 n, d, col, start, end, col_len, j, max_col_len
+        long                       diff
+        int                        sign
+        uint                       m
+        double                     total
+        # reusable buffers
+        np.ndarray[np.float64_t, ndim=1]  probs_arr
+        np.ndarray[np.uint32_t, ndim=1]   adj_np
+        double                             *probs_ptr
+        uint                               *adj_ptr
+
+    # 1) CSC + dtype views
+    X_csc       = X_csr.tocsc()
+    data_arr    = np.asarray(X_csc.data,   dtype=DTYPE)
+    indptr_arr  = np.asarray(X_csc.indptr, dtype=np.intp)
+    indices_arr = np.asarray(X_csc.indices,dtype=np.intp)
+    data    = data_arr
+    indptr  = indptr_arr
+    indices = indices_arr
+    n = X_csc.shape[0]
+    d = X_csc.shape[1]
+
+    # 2) mutable copy of data
+    new_data_arr = data_arr.copy()
+    new_data     = new_data_arr
+
+    # 3) find max nnz per column
+    max_col_len = 0
+    for col in range(d):
+        col_len = indptr[col+1] - indptr[col]
+        if col_len > max_col_len:
+            max_col_len = col_len
+
+    # 4) pre-allocate buffers
+    probs_arr = np.empty(max_col_len, dtype=np.float64)
+    adj_np    = np.empty(max_col_len, dtype=np.uint32)
+    probs_ptr = <double*>probs_arr.data
+    adj_ptr   = <uint*>adj_np.data
+
+    # 5) Column-wise pass
+    for col in range(d):
+        start   = indptr[col]
+        end     = indptr[col+1]
+        col_len = end - start
+        if col_len <= 0:
+            continue
+
+        # sum + copy counts into probs
+        total = 0.0
+        for j in range(col_len):
+            total += data[start + j]
+            probs_arr[j] = data[start + j]
+
+        # compute diff and skip
+        diff = <long>total - <long>S[col]
+        if diff == 0 or total <= 0.0:
+            continue
+        sign = -1 if diff > 0 else 1
+        m = <uint>abs(diff)
+
+        # normalize probs
+        for j in range(col_len): probs_ptr[j] = probs_arr[j] / total
+
+        # sample adjustment under nogil
+        with nogil:
+            sample_multinomial_c(adj_ptr, col_len, m, probs_ptr)
+
+        # apply adjustments
+        for j in range(col_len):
+            c = adj_ptr[j]
+            if c:
+                new_data[start + j] += sign * c
+
+    # rebuild sparse
+    X_csc_upd = csc_matrix(
+        (new_data_arr, indices_arr, indptr_arr),
+        shape=(n, d), dtype=new_data_arr.dtype
     )
-    X_updated = X_csr + delta
-    X_updated.eliminate_zeros()
-    return X_updated
+    X_csc_upd.eliminate_zeros()
+    return X_csc_upd.tocsr()
