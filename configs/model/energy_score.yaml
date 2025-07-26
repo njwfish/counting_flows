@@ -11,3 +11,4 @@ noise_dim: 16
 sigma: 1.0
 m_samples: 16
 lambda_energy: 1.0
+markov_bridge: ${bridge.slack_sampler.markov}

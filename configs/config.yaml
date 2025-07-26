@@ -3,6 +3,7 @@ defaults:
   - model: energy_score
   - dataset: poisson_mixture
   - training: default
+  - slack_sampler: bessel
   - _self_
 
 # Hydra configuration

@@ -15,6 +15,7 @@ class EnergyScorePosterior(nn.Module):
         sigma: float = 1.0,
         m_samples: int = 16,
         lambda_energy: float = 1.0,
+        markov_bridge: bool = False
     ):
         super().__init__()
         # dimension of your Gaussian noise
@@ -23,13 +24,16 @@ class EnergyScorePosterior(nn.Module):
         self.m              = m_samples
         # λ weight for the interaction term
         self.lambda_energy  = lambda_energy
+        
+        # whether to condition on M_t, if the bridge is markov we can drop M_t otherwise we need it
+        self.condition_on_m = not markov_bridge
 
         # total #features going into the MLP:
         #  - x_t: x_dim
         #  - t:     1
         #  - z: context_dim
         #  - ε: noise_dim
-        self._in_dim = x_dim * 2 + 1 + context_dim + self.noise_dim
+        self._in_dim = x_dim * (1 + self.condition_on_m) + 1 + context_dim + self.noise_dim
 
         # build your network
         self.net = nn.Sequential(
@@ -64,11 +68,13 @@ class EnergyScorePosterior(nn.Module):
         else:
             raise ValueError(f"t must be [B] or [B,1], got {tuple(t.shape)}")
 
-        # concat everything
+        # concat everything, elegantly remove z and M_t if not needed
+        to_concat = [x_t.float(), t_col.float(), noise]
         if z is not None:
-            inp = torch.cat([x_t.float(), t_col.float(), z.float(), M_t.float(), noise], dim=-1)
-        else:
-            inp = torch.cat([x_t.float(), t_col.float(), M_t.float(), noise], dim=-1)
+            to_concat.append(z.float())
+        if self.condition_on_m:
+            to_concat.append(M_t.float())
+        inp = torch.cat(to_concat, dim=-1)
 
         # sanity check
         assert inp.shape[1] == self._in_dim, (

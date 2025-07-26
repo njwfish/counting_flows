@@ -12,7 +12,7 @@ class SkellamBridge:
     def __init__(
         self,
         n_steps: int,
-        m_sampler: Callable,
+        slack_sampler: Callable,
         schedule_type: str = "linear",
         homogeneous_time: bool = False,
         backend: str = "torch",
@@ -21,7 +21,7 @@ class SkellamBridge:
     ):
         self.device           = device
         self.n_steps          = n_steps
-        self.m_sampler        = m_sampler
+        self.slack_sampler    = slack_sampler
         self.schedule_type    = schedule_type
         # this is really only for comparison with the constrained bridge
         # there is no need to sample homogeneous time points in this bridge
@@ -41,7 +41,7 @@ class SkellamBridge:
             b, d = x_0.shape
 
             diff = (x_1 - x_0)
-            M = self.m_sampler(diff)
+            M = self.slack_sampler(diff)
             N_1 = cp.abs(diff) + 2 * M
             B_1 = (N_1 + diff) // 2
 
@@ -99,8 +99,8 @@ class SkellamBridge:
 
             def sample_step(k, x_t, M_t=None, **z):
                 if M_t is None:
-                    if not self.m_sampler.markov:
-                        M_t = self.m_sampler(x_t)
+                    if not self.slack_sampler.markov:
+                        M_t = self.slack_sampler(x_t)
 
                 print(k, self.time_points[k])
                 t = cp.broadcast_to(self.time_points[k], (b, 1))
@@ -116,7 +116,7 @@ class SkellamBridge:
 
                 # the markov sampler requires the diff to sample M_t
                 if M_t is None:
-                    M_t = self.m_sampler(diff)
+                    M_t = self.slack_sampler(diff)
 
                 N_t         = cp.abs(diff) + 2 * M_t
                 B_t         = (N_t + diff) // 2
@@ -140,7 +140,7 @@ class SkellamBridge:
 
                 return x_s, M_s, x0_hat_t
             
-            M_t = self.m_sampler(x_1)
+            M_t = self.slack_sampler(x_1)
             x_t, M_t, x0_hat_t = sample_step(self.n_steps, x_t, M_t, **z)
 
             traj, xhat_traj, M_traj = [x_t], [x0_hat_t], [M_t]
