@@ -1,7 +1,7 @@
 """
-Clean Training Functions for Count-based Flow Matching with GPU Bridges
+Clean Training Functions for Flow-based Models with Modular Architecture
 
-Simplified training loop that works with CuPy bridges and normal epochs.
+Simplified training loop that works with various bridges (CFM, counting flows, etc.) and loss functions.
 """
 
 import torch
@@ -11,9 +11,10 @@ from typing import Dict, Any, Optional, Tuple
 import logging
 
 
-class CountFlowTrainer:
+class FlowTrainer:
     """
-    Clean trainer for count-based flow matching with GPU bridges
+    Clean, modular trainer for flow-based models.
+    Works with any bridge (CFM, counting flows, etc.) and loss function (energy score, MSE, etc.).
     """
     
     def __init__(
@@ -90,14 +91,25 @@ class CountFlowTrainer:
         # Extract data from batch
         x_0 = batch['x_0'].to(self.device)  # Target counts
         x_1 = batch['x_1'].to(self.device)  # Source counts  
-        z = None  # No conditioning for simple case
+        z = batch.get('z', None)  # Conditioning (optional)
+        if z is not None:
+            z = z.to(self.device)
         
         # Apply bridge to get diffusion samples
-        x_t, M_t, t = bridge(x_0, x_1)
+        bridge_output = bridge(x_0, x_1)
+        
+        # Extract inputs and outputs from bridge
+        inputs = bridge_output['inputs']
+        target = bridge_output['output']
+        
+        # Add conditioning to inputs if present
+        if z is not None:
+            inputs = inputs.copy()  # Don't modify original
+            inputs['z'] = z
         
         # Training step
         self.optimizer.zero_grad()
-        loss = model.loss(x_0, x_t, M_t, t, z)
+        loss = model.loss(target, inputs)
         loss.backward()
         self.optimizer.step()
         

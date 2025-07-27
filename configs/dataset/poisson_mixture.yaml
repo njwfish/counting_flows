@@ -1,9 +1,10 @@
 # Poisson Mixture Dataset Configuration
-_target_: datasets.PoissonMixtureDataset
+_target_: datasets.poisson_mixture.PoissonMixtureDataset
 
 # Dataset parameters
 size: 50000  # total samples in dataset (pre-sampled for speed)
-d: ${data_dim}
+data_dim: 4
+max_value: 128
 
 # Mixture parameters
 k: 3  # number of mixture components

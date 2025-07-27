@@ -131,7 +131,7 @@ def main(cfg: DictConfig) -> None:
     
     logging.info(f"Experiment: {cfg.experiment.name}")
     logging.info(f"Model: {type(model).__name__} ({sum(p.numel() for p in model.parameters()):,} params)")
-    logging.info(f"Dataset: {len(dataset)} samples, {dataset.d}D")
+    logging.info(f"Dataset: {len(dataset)} samples, {dataset.data_dim}D")
     
     # Training
     if not training_complete:

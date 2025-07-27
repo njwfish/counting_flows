@@ -1,10 +1,9 @@
 defaults:
-  - bridge: skellam
-  - architecture: mlp_noise
-  - model: energy_score
+  - bridge: dfm
+  - model: discrete_flow
   - dataset: poisson_mixture
   - training: default
-  - slack_sampler: bessel
+  - architecture: mlp_discrete
   - _self_
 
 # Hydra configuration

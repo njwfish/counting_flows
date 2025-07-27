@@ -1,0 +1,5 @@
+# MSE Loss Configuration
+_target_: models.mse.MSELoss
+
+# Architecture (use MLP by default)
+architecture: ${architecture} 

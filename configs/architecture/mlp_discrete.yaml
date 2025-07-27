@@ -1,0 +1,16 @@
+# MLP Architecture Configuration for Discrete Flow
+_target_: architecture.mlp.MLP
+
+# Input dimensions for discrete flow (no embeddings):
+# - x_t: discrete tokens (data_dim = 2)  
+# - t: time (1)
+in_dims: 
+  - ${dataset.data_dim}  # x_t (discrete tokens as integers)
+  - 1            # time
+
+# Output: (data_dim, vocab_size) as list for flexible reshaping
+hidden_dim: 64
+out_dim:
+  - ${dataset.data_dim}  # 2
+  - ${dataset.max_value}          # vocab_size
+layers: 3 

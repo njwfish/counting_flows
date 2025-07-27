@@ -1,0 +1,10 @@
+# MLP Architecture Configuration for CFM with MSE (deterministic, no noise)
+_target_: architecture.mlp.MLP
+
+# Input dimensions: [x_t, t] (no noise for deterministic MSE)
+in_dims: 
+  - ${dataset.data_dim}
+  - 1
+hidden_dim: 64
+out_dim: ${dataset.data_dim}
+layers: 3 

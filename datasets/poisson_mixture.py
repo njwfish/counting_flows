@@ -22,7 +22,8 @@ class PoissonMixtureDataset(Dataset):
     def __init__(
         self,
         size: int,
-        d: int,
+        data_dim: int,
+        max_value: int = 1024,
         k: int = 3,
         lambda_loc: float = 20.0,
         lambda_scale: float = 20.0,
@@ -36,12 +37,13 @@ class PoissonMixtureDataset(Dataset):
             resample_every: Resample mixture parameters every N samples
         """
         self.size = size
-        self.d = d
+        self.data_dim = data_dim
+        self.max_value = max_value
         self.k = k
         self.lambda_scale = lambda_scale
         self.lambda_loc = lambda_loc
         
-        print(f"Pre-sampling {size} samples with d={d}, k={k}...")
+        print(f"Pre-sampling {size} samples with d={data_dim}, k={k}...")
         
         # Pre-sample all data
         self._pre_sample_all_data()
@@ -52,8 +54,8 @@ class PoissonMixtureDataset(Dataset):
         """Pre-sample all source and target data at initialization using vectorized operations"""
         # Calculate how many parameter sets we need        
         # Pre-allocate tensors for all data
-        self.x0_data = torch.zeros(self.size, self.d, dtype=torch.int32)
-        self.x1_data = torch.zeros(self.size, self.d, dtype=torch.int32)
+        self.x0_data = torch.zeros(self.size, self.data_dim, dtype=torch.int32)
+        self.x1_data = torch.zeros(self.size, self.data_dim, dtype=torch.int32)
         
         sample_idx = 0
         
@@ -70,8 +72,8 @@ class PoissonMixtureDataset(Dataset):
         # Sample lambda matrices using Normal to ensure positivity
         # Shape: (k, d) for both source and target
         normal = Normal(scale=self.lambda_scale, loc=self.lambda_loc)
-        lambda_source = torch.abs(normal.sample((self.k, self.d)))  # [k, d]
-        lambda_target = torch.abs(normal.sample((self.k, self.d)))  # [k, d]
+        lambda_source = torch.abs(normal.sample((self.k, self.data_dim)))  # [k, d]
+        lambda_target = torch.abs(normal.sample((self.k, self.data_dim)))  # [k, d]
         
         # Sample mixture weights using Dirichlet
         weights_source = Dirichlet(torch.ones(self.k)).sample()  # [k]
@@ -89,19 +91,22 @@ class PoissonMixtureDataset(Dataset):
             num_samples: Number of samples to generate
         
         Returns:
-            Batch of samples from mixture [num_samples, d]
+            Batch of samples from mixture [num_samples, data_dim]
         """
         # Sample which components to use for each sample - vectorized
         # Shape: [num_samples]
         components = torch.multinomial(weights, num_samples, replacement=True)
         
         # Use advanced indexing to select lambda parameters for each sample
-        # Shape: [num_samples, d]
-        selected_lambdas = lambdas[components]  # Broadcasting: [num_samples] -> [num_samples, d]
+        # Shape: [num_samples, data_dim]
+        selected_lambdas = lambdas[components]  # Broadcasting: [num_samples] -> [num_samples, data_dim]
         
         # Sample from Poisson distributions vectorized
         # Each row of selected_lambdas contains the lambda parameters for one sample
-        samples = Poisson(selected_lambdas).sample()  # [num_samples, d]
+        samples = Poisson(selected_lambdas).sample()  # [num_samples, data_dim]
+
+        # Clip samples to max_value
+        samples = torch.clamp(samples, max=self.max_value)
         
         return samples.int()
     

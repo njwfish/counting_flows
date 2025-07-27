@@ -13,6 +13,7 @@ class SkellamBridge:
         self,
         n_steps: int,
         slack_sampler: Callable,
+        delta: bool = False,
         schedule_type: str = "linear",
         homogeneous_time: bool = False,
         backend: str = "torch",
@@ -23,6 +24,7 @@ class SkellamBridge:
         self.n_steps          = n_steps
         self.slack_sampler    = slack_sampler
         self.schedule_type    = schedule_type
+        self.delta            = delta
         # this is really only for comparison with the constrained bridge
         # there is no need to sample homogeneous time points in this bridge
         self.homogeneous_time = homogeneous_time
@@ -77,9 +79,19 @@ class SkellamBridge:
             diff_t = cp.abs(x_t - x_0)
             M_t    = (N_t - diff_t) // 2
 
-            return dlpack_backend(x_t, M_t, t, backend=self.backend, dtype="float32")
+            x_t, M_t, t, x_0 = dlpack_backend(x_t, M_t, t, x_0, backend=self.backend, dtype="float32")
+            out_dict = {
+                "inputs": {
+                    "x_t": x_t,
+                    "t": t,
+                },
+                "output": x_0 - x_t if self.delta else x_0
+            }
+            if not self.slack_sampler.markov:
+                out_dict["inputs"]["M_t"] = M_t
+            return out_dict
     
-    def reverse_sampler(
+    def sampler(
         self,
         x_1:  cp.ndarray,
         z:   dict,
@@ -92,7 +104,7 @@ class SkellamBridge:
     ):
         with cp.cuda.Device(self.device):
             b, d    = x_1.shape
-            x_t     = cp.from_dlpack(x_1).round().astype(cp.int32)
+            x_1 = x_t = cp.from_dlpack(x_1).round().astype(cp.int32)
 
             if guidance_x_0 is not None:
                 guidance_x_0 = cp.from_dlpack(guidance_x_0).round().astype(cp.int32)
@@ -102,11 +114,13 @@ class SkellamBridge:
                     if not self.slack_sampler.markov:
                         M_t = self.slack_sampler(x_t)
 
-                print(k, self.time_points[k])
                 t = cp.broadcast_to(self.time_points[k], (b, 1))
                 x_t_dl, M_t_dl, t_dl = dlpack_backend(x_t, M_t, t, backend=self.backend, dtype="float32")
-                x0_hat_t = model.sample(x_t_dl, M_t_dl, t_dl, **z)
-                x0_hat_t = cp.from_dlpack(x0_hat_t)
+                if not self.slack_sampler.markov:
+                    model_out = model.sample(x_t=x_t_dl, M_t=M_t_dl, t=t_dl, **z)
+                else:
+                    model_out = model.sample(x_t=x_t_dl, t=t_dl, **z)
+                x0_hat_t = cp.from_dlpack(model_out) + x_t if self.delta else cp.from_dlpack(model_out)
 
                 if guidance_x_0 is not None:
                     x0_hat_t =  guidance_schedule[k] * guidance_x_0 + (1 - guidance_schedule[k]) * x0_hat_t
@@ -156,4 +170,4 @@ class SkellamBridge:
             if return_trajectory: outs.append(cp.stack(traj))
             if return_x_hat:      outs.append(cp.stack(xhat_traj))
             if return_M:          outs.append(cp.stack(M_traj))
-            return tuple(outs) if len(outs) > 1 else x_t 
+            return dlpack_backend(*outs, backend=self.backend, dtype="float32") if len(outs) > 1 else dlpack_backend(x_t, backend=self.backend, dtype="float32") 
