@@ -19,16 +19,12 @@ A modular, Hydra-based framework for **count-based flow matching** with speciali
 
 ```bash
 # Clone the repository
-git clone <repository-url>
+git clone https://github.com/njwfish/counting_flows.git
 cd counting_flows
 
 # Install dependencies
 pip install -r requirements.txt
-
-# For GPU acceleration (optional but recommended)
 pip install cupy-cuda12x  # For CUDA 12.x
-# OR
-pip install cupy-cuda11x  # For CUDA 11.x
 ```
 
 ## 🔬 Novel Contributions
