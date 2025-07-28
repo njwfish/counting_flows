@@ -27,20 +27,26 @@ class AttentionArch(nn.Module):
     ):
         super().__init__()
         
+        # Convert Hydra configs to regular Python types
         if isinstance(in_dims, int):
             in_dims = [in_dims]
-        if isinstance(out_dim, list):
+        else:
+            in_dims = list(in_dims)  # Convert ListConfig to list
+            
+        if hasattr(out_dim, '__iter__') and not isinstance(out_dim, int):
+            # out_dim is a list/ListConfig
+            out_dim = list(out_dim)  # Convert ListConfig to list
             self.out_shape = out_dim
             total_output_dim = 1
             for dim in out_dim:
-                total_output_dim *= dim
-            self.output_dim = out_dim[0]  # First dimension for splitting
+                total_output_dim *= int(dim)  # Convert to int
+            self.output_dim = int(out_dim[0])  # First dimension for splitting
         else:
             self.out_shape = None
-            total_output_dim = out_dim
-            self.output_dim = out_dim
+            total_output_dim = int(out_dim)
+            self.output_dim = int(out_dim)
             
-        self.in_dims = in_dims
+        self.in_dims = [int(dim) for dim in in_dims]  # Convert all to int
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
         
@@ -52,7 +58,7 @@ class AttentionArch(nn.Module):
         # Calculate input dimension per token after concatenation
         # Each token gets: projected split input + all broadcasted inputs
         split_input_dim = hidden_dim  # We'll project split inputs to hidden_dim
-        broadcast_input_dim = sum(in_dims) - self.split_dim  # Remaining inputs get broadcasted
+        broadcast_input_dim = sum(self.in_dims) - self.split_dim  # Remaining inputs get broadcasted
         self.token_input_dim = split_input_dim + broadcast_input_dim
         
         # Projection for split inputs (from raw value to hidden_dim)

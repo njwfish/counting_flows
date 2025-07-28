@@ -1,0 +1,20 @@
+# Attention Architecture Configuration for Discrete Flow
+_target_: architecture.attention.AttentionArch
+
+# Input dimensions for discrete flow (no embeddings):
+# - x_t: discrete tokens (data_dim = 2)  
+# - t: time (1)
+in_dims: 
+  - ${data_dim}  # x_t (discrete tokens, will be split per dimension)
+  - 1            # time (broadcasted to all tokens)
+
+# Output: (data_dim, vocab_size) as list for flexible reshaping
+hidden_dim: 64
+out_dim:
+  - ${data_dim}  # 2
+  - 128          # vocab_size
+
+# Transformer parameters
+num_heads: 4      # number of attention heads
+num_layers: 2     # number of transformer layers
+dropout: 0.1      # dropout rate 

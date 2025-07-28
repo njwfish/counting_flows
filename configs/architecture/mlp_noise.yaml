@@ -6,6 +6,7 @@ in_dims:
   - ${dataset.data_dim} 
   - 1
   - ${model.noise_dim}
+  
 hidden_dim: 64
 out_dim: ${dataset.data_dim}
 layers: 3 
