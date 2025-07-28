@@ -23,7 +23,8 @@ class PoissonMixtureDataset(Dataset):
         self,
         size: int,
         data_dim: int,
-        max_value: int = 1024,
+        value_range: int = 1024,
+        min_value: int = 0,
         k: int = 3,
         lambda_loc: float = 20.0,
         lambda_scale: float = 20.0,
@@ -38,7 +39,8 @@ class PoissonMixtureDataset(Dataset):
         """
         self.size = size
         self.data_dim = data_dim
-        self.max_value = max_value
+        self.value_range = value_range
+        self.min_value = min_value
         self.k = k
         self.lambda_scale = lambda_scale
         self.lambda_loc = lambda_loc
@@ -106,7 +108,7 @@ class PoissonMixtureDataset(Dataset):
         samples = Poisson(selected_lambdas).sample()  # [num_samples, data_dim]
 
         # Clip samples to max_value
-        samples = torch.clamp(samples, max=self.max_value)
+        samples = torch.clamp(samples, min=self.min_value, max=self.value_range - 1)
         
         return samples.int()
     

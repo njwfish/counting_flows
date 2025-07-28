@@ -1,7 +1,7 @@
 """
-Discrete Moons Dataset for Count-based Flow Matching
+Discrete 8-Gaussians to 2-Moons Dataset for Count-based Flow Matching
 
-Integerized version of sklearn make_moons dataset scaled to discrete vocabulary.
+Integerized version of 8-gaussians -> 2-moons task scaled to discrete vocabulary.
 """
 
 import torch
@@ -13,19 +13,21 @@ from typing import Dict, Any
 
 class DiscreteMoonsDataset(Dataset):
     """
-    Discrete version of 2-moons dataset for discrete flow matching.
+    Discrete version of 8-gaussians -> 2-moons dataset for discrete flow matching.
     
-    Converts continuous 2D moons data to discrete integers in vocab_size range
+    Converts continuous 2D data to discrete integers in vocab_size range
     following the scaling: round(clip(x * scale + offset, 0, vocab_size-1))
     """
     
     def __init__(
         self,
         size: int,
-        vocab_size: int = 128,
+        value_range: int = 128,
+        min_value: int = 0,
         scale: float = 35.0,
         offset: float = 50.0,
         noise: float = 0.05,
+        data_dim: int = 2,
     ):
         """
         Args:
@@ -36,36 +38,64 @@ class DiscreteMoonsDataset(Dataset):
             noise: Noise level for make_moons
         """
         self.size = size
-        self.vocab_size = vocab_size
+        self.value_range = value_range
+        self.min_value = min_value
         self.scale = scale
         self.offset = offset
         self.noise = noise
+        self.data_dim = data_dim
+
         
-        print(f"Pre-sampling {size} discrete moons samples with vocab_size={vocab_size}...")
+        print(f"Pre-sampling {size} discrete moons samples with range={value_range}...")
         
         # Pre-sample all data
         self._pre_sample_all_data()
         
         print(f"✓ Pre-sampling complete!")
     
+    def _make_8_gaussians(self, n_samples, noise: float = 0.02):
+        """Generate 8 gaussians arranged in a circle"""
+        n_gaussians = 8
+        variance = noise
+        radius = 2.0
+        
+        # Generate angles for 8 gaussians evenly spaced around circle
+        angles = np.linspace(0, 2*np.pi, n_gaussians, endpoint=False)
+        
+        # Centers of gaussians
+        centers = np.array([(radius * np.cos(angle), radius * np.sin(angle)) for angle in angles])
+        
+        # Sample from each gaussian
+        samples = []
+        for i in range(n_samples):
+            # Choose a random gaussian
+            gaussian_idx = np.random.randint(n_gaussians)
+            center = centers[gaussian_idx]
+            
+            # Sample from that gaussian
+            sample = np.random.normal(center, variance)
+            samples.append(sample)
+        
+        return np.array(samples)
+    
+    def _discretize_data(self, continuous_data):
+        """Convert continuous data to discrete integers using scaling"""
+        data_tensor = torch.tensor(continuous_data, dtype=torch.float32)
+        discrete_data = torch.round(
+            torch.clamp(data_tensor * self.scale + self.offset, 
+                       min=self.min_value, max=self.value_range - 1)
+        ).long()
+        return discrete_data
+    
     def _pre_sample_all_data(self):
         """Pre-sample all source and target data at initialization"""
-        # Generate continuous moons data
+        # Generate 8 gaussians data for x_0 (source)
+        gaussians_data = self._make_8_gaussians(self.size, noise=4 *self.noise)
+        self.x1_data = self._discretize_data(gaussians_data)
+        
+        # Generate 2 moons data for x_1 (target)
         moons_data, _ = make_moons(self.size, noise=self.noise)
-        
-        # Convert to discrete integers following notebook scaling
-        # x_1 = torch.round(torch.clip(x_1 * 35 + 50, min=0.0, max=vocab_size - 1)).long()
-        moons_tensor = torch.tensor(moons_data, dtype=torch.float32)
-        self.x1_data = torch.round(
-            torch.clamp(moons_tensor * self.scale + self.offset, 
-                       min=0.0, max=self.vocab_size - 1)
-        ).long()
-        
-        # Generate random noise data for x_0
-        # x_0 = torch.randint(low=0, high=vocab_size, size=(batch_size, 2))
-        self.x0_data = torch.randint(
-            low=0, high=self.vocab_size, size=(self.size, 2)
-        )
+        self.x0_data = self._discretize_data(moons_data)
     
     def __len__(self) -> int:
         """Return dataset size"""

@@ -1,0 +1,19 @@
+# Attention Architecture Configuration
+_target_: architecture.attention.AttentionArch
+
+# Input dimensions (flexible like MLP)
+in_dims: 
+  - ${data_dim}  # x_t (first data_dim dimensions will be split)
+  - 1            # time (broadcasted to all tokens)
+
+# Output dimensions (flexible like MLP)  
+hidden_dim: 64
+out_dim: ${data_dim}
+
+# Transformer parameters
+num_heads: 4      # number of attention heads
+num_layers: 2     # number of transformer layers
+dropout: 0.1      # dropout rate
+
+# Optional: explicitly specify which dimension to use for splitting
+# output_dim: ${data_dim}  # defaults to first dimension of out_dim 

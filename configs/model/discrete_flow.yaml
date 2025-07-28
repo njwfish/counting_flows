@@ -1,5 +1,0 @@
-# Discrete Flow Model Configuration
-_target_: models.discrete_flow.DiscreteFlowModel
-
-# Model parameters (simple - just architecture)
-architecture: ${architecture}  # MLP architecture 

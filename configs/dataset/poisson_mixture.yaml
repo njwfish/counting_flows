@@ -4,7 +4,8 @@ _target_: datasets.poisson_mixture.PoissonMixtureDataset
 # Dataset parameters
 size: 50000  # total samples in dataset (pre-sampled for speed)
 data_dim: 4
-max_value: 128
+value_range: 128
+min_value: 0
 
 # Mixture parameters
 k: 3  # number of mixture components

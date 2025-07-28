@@ -9,20 +9,23 @@ import torch
 import torch.nn as nn
 
 
-class DiscreteFlowModel(nn.Module):
+class CrossEntropyLoss(nn.Module):
     """
     Discrete Flow model with cross entropy loss.
     Works with arbitrary architectures and clean input interface.
     No embeddings - treats discrete inputs as regular integers.
     """
     
-    def __init__(self, architecture):
+    def __init__(self, architecture, min_value=0, value_range=128):
         """
         Args:
             architecture: MLP architecture that outputs (data_dim, vocab_size) shaped logits
         """
         super().__init__()
         self.architecture = architecture
+        self.min_value = min_value
+        self.value_range = value_range
+        print(f"min_value: {self.min_value}, value_range: {self.value_range}")
     
     def forward(self, inputs):
         """
@@ -44,7 +47,7 @@ class DiscreteFlowModel(nn.Module):
         logits = self.forward(kwargs)  # (batch_size, data_dim, vocab_size)
         probs = torch.softmax(logits, dim=-1)
         samples = torch.distributions.Categorical(probs=probs).sample()
-        return samples
+        return samples + self.min_value 
     
     def loss(self, target, inputs):
         """
@@ -58,6 +61,8 @@ class DiscreteFlowModel(nn.Module):
             Cross entropy loss scalar
         """
         logits = self.forward(inputs)  # (batch_size, data_dim, vocab_size)
+        target = target - self.min_value
+        target = torch.clamp(target, min=0, max=self.value_range)
         
         # Flatten for cross entropy: (batch_size * data_dim, vocab_size) and (batch_size * data_dim,)
         logits_flat = logits.reshape(-1, logits.shape[-1])

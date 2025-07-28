@@ -101,7 +101,7 @@ class DiscreteFlowBridge:
         for step in range(self.n_steps):
             t = step / self.n_steps  # Current time
             
-            # Get model predictions (logits) 
+            # Get model predictions (logits)
             t_tensor = torch.full((batch_size, 1), t, device=x_t.device)
             with torch.no_grad():
                 logits = model.forward({"x_t": x_t, "t": t_tensor, **z})

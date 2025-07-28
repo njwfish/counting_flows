@@ -12,5 +12,5 @@ in_dims:
 hidden_dim: 64
 out_dim:
   - ${dataset.data_dim}  # 2
-  - ${dataset.max_value}          # vocab_size
+  - ${dataset.value_range}          # vocab_size
 layers: 3 
