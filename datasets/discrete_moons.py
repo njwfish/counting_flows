@@ -84,7 +84,7 @@ class DiscreteMoonsDataset(Dataset):
         discrete_data = torch.round(
             torch.clamp(data_tensor * self.scale + self.offset, 
                        min=self.min_value, max=self.value_range - 1)
-        ).long()
+        ).int()
         return discrete_data
     
     def _pre_sample_all_data(self):

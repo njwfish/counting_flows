@@ -57,10 +57,10 @@ class DiscreteFlowBridge:
         
         return {
             "inputs": {
-                "x_t": x_t,  # Discrete masked state
+                "x_t": x_t.float(),  # Discrete masked state
                 "t": t.unsqueeze(1),      # Time values (match CFM format)
             },
-            "output": x_0,   # Target for cross entropy loss
+            "output": x_0.float(),   # Target for cross entropy loss
         }
     
     def sampler(

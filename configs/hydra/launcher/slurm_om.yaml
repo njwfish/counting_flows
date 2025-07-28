@@ -1,0 +1,18 @@
+_target_: hydra_plugins.hydra_submitit_launcher.submitit_launcher.SlurmLauncher
+
+partition: abugoot           # or normal, depending on GPU availability
+nodes: 1                     # each sub-job stays on 1 GPU
+gpus_per_node: 1             # request 1 GPU
+cpus_per_task: 4
+mem_gb: 32
+timeout_min: 720
+
+submitit_folder: ${hydra.sweep.dir}/.submitit/%j
+array_parallelism: 18        # max concurrent sub-jobs
+max_num_timeout: 3
+
+additional_parameters:
+  gres: gpu:1
+  ntasks-per-gpu: 2
+  mail-type: END,FAIL
+  mail-user: nfishman@g.harvard.edu
