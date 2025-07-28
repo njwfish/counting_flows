@@ -10,6 +10,8 @@ from omegaconf import DictConfig, OmegaConf
 import logging
 from pathlib import Path
 import numpy as np
+import pickle
+import cupy as cp
 
 # Capture original working directory before Hydra changes it
 ORIGINAL_CWD = Path.cwd().resolve()
@@ -29,6 +31,7 @@ def setup_environment(cfg: DictConfig) -> str:
     # Set random seeds
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
+    cp.random.seed(cfg.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(cfg.seed)
     
@@ -174,9 +177,14 @@ def main(cfg: DictConfig) -> None:
         logging.info("Generating evaluation and plots...")
         
         # Generate evaluation data
-        eval_data = generate_evaluation_data(trained_model, bridge, dataset, n_samples=200)
+        eval_data = generate_evaluation_data(trained_model, bridge, dataset, n_samples=1000)
         metrics = compute_evaluation_metrics(eval_data)
         log_evaluation_summary(eval_data, metrics)
+
+        # save eval data
+        eval_data_path = output_dir / "eval_data.pkl"
+        with open(eval_data_path, 'wb') as f:
+            pickle.dump(eval_data, f)
         
         # Create plots
         plots = {}

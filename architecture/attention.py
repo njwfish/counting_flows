@@ -50,25 +50,31 @@ class AttentionArch(nn.Module):
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
         
-        # Calculate dimensions for broadcasting inputs
-        # We need to know which inputs have shape (batch, output_dim) to split them
-        # For now, assume first input dimension matches output_dim for splitting
-        self.split_dim = self.output_dim if output_dim is None else output_dim
+        # Calculate dimensions from input specification
+        # Assume inputs matching output_dim are splittable, others are broadcastable
+        splittable_dim = sum(dim for dim in self.in_dims if dim == self.output_dim)
+        broadcastable_dim = sum(dim for dim in self.in_dims if dim != self.output_dim)
         
-        # Calculate input dimension per token after concatenation
-        # Each token gets: projected split input + all broadcasted inputs
-        split_input_dim = hidden_dim  # We'll project split inputs to hidden_dim
-        broadcast_input_dim = sum(self.in_dims) - self.split_dim  # Remaining inputs get broadcasted
-        self.token_input_dim = split_input_dim + broadcast_input_dim
+        # Calculate split features per dimension
+        self.split_features_per_dim = splittable_dim // self.output_dim if splittable_dim > 0 else 0
         
-        # Projection for split inputs (from raw value to hidden_dim)
-        self.split_projection = nn.Linear(1, hidden_dim)
+        # Create projection layers during init
+        if self.split_features_per_dim > 0:
+            self.split_projection = nn.Linear(self.split_features_per_dim, hidden_dim)
+        else:
+            self.split_projection = None
+            
+        # Token input dimension and projection
+        self.token_input_dim = hidden_dim + broadcastable_dim
+        self.input_projection = nn.Linear(self.token_input_dim, hidden_dim)
+        
+        # Cached input mapping for efficiency (keys only, not dimensions)
+        self._input_mapping_cached = False
+        self._splittable_keys = []
+        self._broadcastable_keys = []
         
         # Position embeddings for each dimension
         self.pos_embeddings = nn.Parameter(torch.randn(self.output_dim, hidden_dim))
-        
-        # Input projection to transformer dimension
-        self.input_projection = nn.Linear(self.token_input_dim, hidden_dim)
         
         # Standard PyTorch transformer encoder
         encoder_layer = nn.TransformerEncoderLayer(
@@ -97,20 +103,43 @@ class AttentionArch(nn.Module):
         Returns:
             Output tensor, reshaped if out_dim was a list
         """
-        # Concatenate all inputs first
-        all_inputs = concat_inputs(**kwargs)  # (batch_size, total_input_dim)
-        batch_size = all_inputs.shape[0]
+        batch_size = next(iter(kwargs.values())).shape[0]
         
-        # Split inputs into "splittable" and "broadcastable"
-        split_inputs = all_inputs[:, :self.split_dim]  # (batch_size, split_dim)
-        broadcast_inputs = all_inputs[:, self.split_dim:]  # (batch_size, broadcast_dim)
+        # Cache input mapping on first forward pass for efficiency
+        if not self._input_mapping_cached:
+            for name, tensor in kwargs.items():
+                if tensor.shape[-1] == self.output_dim:  # Data-dimension inputs (x_t, M_t, etc.)
+                    self._splittable_keys.append(name)
+                else:  # Other inputs (t, noise, etc.)
+                    self._broadcastable_keys.append(name)
+            self._input_mapping_cached = True
         
-        # Vectorized token creation - much more efficient!
-        # Reshape split inputs for vectorized projection
-        split_reshaped = split_inputs.unsqueeze(-1)  # (batch_size, output_dim, 1)
+        # Use cached mapping for efficient splitting
+        splittable_tensors = [kwargs[key] for key in self._splittable_keys]
+        broadcastable_tensors = [kwargs[key] for key in self._broadcastable_keys]
         
-        # Apply projection to all dimensions at once
-        projected_dims = self.split_projection(split_reshaped)  # (batch_size, output_dim, hidden_dim)
+        # Concatenate splittable and broadcastable separately
+        split_inputs = torch.cat(splittable_tensors, dim=-1) if splittable_tensors else torch.empty(batch_size, 0)
+        broadcast_inputs = torch.cat(broadcastable_tensors, dim=-1) if broadcastable_tensors else torch.empty(batch_size, 0)
+        
+        # Verify dimensions match expectations (debug check)
+        if split_inputs.shape[1] > 0:
+            expected_split_features = split_inputs.shape[1] // self.output_dim
+            assert expected_split_features == self.split_features_per_dim, \
+                f"Split features mismatch: expected {self.split_features_per_dim}, got {expected_split_features}"
+        
+        # Vectorized token creation - handle multiple splittable inputs
+        if split_inputs.shape[1] > 0 and self.split_projection is not None:
+            # Reshape to separate per-dimension tokens: (batch_size, split_features, output_dim)  
+            split_reshaped = split_inputs.view(batch_size, self.split_features_per_dim, self.output_dim)
+            # Transpose to (batch_size, output_dim, split_features) for per-dimension processing
+            split_reshaped = split_reshaped.transpose(1, 2)  # (batch_size, output_dim, split_features)
+            
+            # Apply projection to all dimensions at once
+            projected_dims = self.split_projection(split_reshaped)  # (batch_size, output_dim, hidden_dim)
+        else:
+            # No splittable inputs - create zero projections
+            projected_dims = torch.zeros(batch_size, self.output_dim, self.hidden_dim, device=next(self.parameters()).device)
         
         # Broadcast other inputs to all tokens
         if broadcast_inputs.shape[1] > 0:

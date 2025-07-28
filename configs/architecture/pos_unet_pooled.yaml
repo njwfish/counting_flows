@@ -1,0 +1,13 @@
+# Efficient Encoder-Decoder with Mean-Pooled Head
+_target_: architecture.pos_unet.PositionalUNet
+
+# Output dimensions
+hidden_dim: 64
+
+# Architecture choices
+encoder_type: "mlp"          # Simple MLP encoder
+head_type: "mean_pooled"     # Mean-pooled head for efficient context sharing
+
+# Layer configurations
+encoder_layers: 3
+head_layers: 2

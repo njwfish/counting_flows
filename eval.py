@@ -11,7 +11,7 @@ from bridges.cupy.skellam import SkellamBridge
 
 
 def generate_evaluation_data(model: torch.nn.Module, bridge: Any, dataset: Any, 
-                           n_samples: int = 200) -> Dict[str, np.ndarray]:
+                           n_samples: int = 1000) -> Dict[str, np.ndarray]:
     """Generate evaluation data from trained model"""
     model.eval()
     

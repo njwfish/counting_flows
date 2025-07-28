@@ -1,7 +1,9 @@
 defaults:
   - bridge: cfm
-  - architecture: mlp
   - model: mse
+  - architecture: mlp
+  - architecture/in_dims: standard
+  - architecture/out_dim: scalar
   - dataset: poisson_mixture
   - training: default
   - _self_
@@ -16,7 +18,6 @@ hydra:
 # Global settings
 device: cuda
 seed: 42
-data_dim: 4
 n_steps: 30
 
 # Experiment settings

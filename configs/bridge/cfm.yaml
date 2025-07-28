@@ -6,4 +6,3 @@ n_steps: ${n_steps}
 fm_type: "cfm"
 ot_type: "none"
 sigma: 0.1
-device: 0 

@@ -1,0 +1,13 @@
+# Basic Encoder-Decoder Architecture
+_target_: architecture.pos_unet.PositionalUNet
+
+# Output dimensions
+hidden_dim: 64
+
+# Architecture choices
+encoder_type: "mlp"        # Simple MLP encoder
+head_type: "mlp"           # Simple MLP head
+
+# Layer configurations
+encoder_layers: 3
+head_layers: 2 

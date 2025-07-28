@@ -1,0 +1,15 @@
+# Sophisticated Encoder-Decoder with BERT + Attention
+_target_: architecture.pos_unet.PositionalUNet
+
+# Output dimensions
+hidden_dim: 64
+
+# Architecture choices
+encoder_type: "bert"         # BERT-like encoder with attention over dimensions
+head_type: "attention"       # Attention-based head with cross-attention
+
+# Layer configurations
+encoder_layers: 3
+head_layers: 2
+num_heads: 4
+dropout: 0.1 

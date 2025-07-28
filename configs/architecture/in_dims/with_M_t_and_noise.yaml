@@ -1,0 +1,5 @@
+# Counting flows inputs: [x_t, t, M_t]
+- ${dataset.data_dim}
+- 1
+- ${dataset.data_dim} 
+- ${model.noise_dim}

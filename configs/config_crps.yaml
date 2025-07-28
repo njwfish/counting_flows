@@ -1,7 +1,9 @@
 defaults:
   - bridge: skellam
-  - architecture: mlp_discrete
   - model: crps
+  - architecture: mlp
+  - architecture/in_dims: standard
+  - architecture/out_dim: discrete
   - dataset: poisson_mixture
   - training: default
   - slack_sampler: bessel
@@ -22,7 +24,6 @@ hydra:
 # Global settings
 device: cuda
 seed: 42
-data_dim: 4
 n_steps: 30
 
 

@@ -2,17 +2,12 @@ defaults:
   - bridge: skellam
   - model: cross_entropy
   - architecture: mlp
-  - architecture/in_dims: standard
+  - architecture/in_dims: with_M_t
   - architecture/out_dim: discrete
   - dataset: poisson_mixture
   - training: default
-  - slack_sampler: bessel
+  - slack_sampler: poisson
   - _self_
-
-# override min_value and max_value in model/cross_entropy.yaml
-model:
-  min_value: -64
-  value_range: ${dataset.value_range}
 
 # Hydra configuration
 hydra:
@@ -25,7 +20,6 @@ hydra:
 device: cuda
 seed: 42
 n_steps: 30
-
 
 # Experiment settings
 experiment:

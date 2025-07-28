@@ -1,9 +1,11 @@
 defaults:
   - bridge: dfm
   - model: cross_entropy
+  - architecture: mlp
+  - architecture/in_dims: standard
+  - architecture/out_dim: discrete
   - dataset: poisson_mixture
   - training: default
-  - architecture: mlp_discrete
   - _self_
 
 # Hydra configuration
@@ -16,7 +18,6 @@ hydra:
 # Global settings
 device: cuda
 seed: 42
-data_dim: 4
 n_steps: 30
 
 # Experiment settings
