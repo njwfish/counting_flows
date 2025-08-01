@@ -1,9 +1,0 @@
-# ARDigit Model Configuration
-_target_: models.crps.RelaxedEnergyScoreLoss
-
-architecture: ${architecture}  # MLP architecture 
-min_value: ${dataset.min_value}
-value_range: ${dataset.value_range}
-noise_dim: 16
-m_samples: 16
-lambda_int: 1.0
