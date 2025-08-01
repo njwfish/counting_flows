@@ -113,16 +113,12 @@ class SkellamBridge:
                 if not self.slack_sampler.markov:
                     M_t = self.slack_sampler(x_t)
 
-            print("t", k, self.time_points[k])
-
             t = np.broadcast_to(self.time_points[k], (b, 1))
             
             if not self.slack_sampler.markov:
                 x_t_dl, M_t_dl, t_dl = dlpack_backend(x_t, M_t, t, backend=self.backend, dtype="float32", device=self.device)
                 model_out = model.sample(x_t=x_t_dl, M_t=M_t_dl, t=t_dl, **z)
             else:
-                print("x_t", x_t.shape)
-                print("t", t.shape)
                 x_t_dl, t_dl = dlpack_backend(x_t, t, backend=self.backend, dtype="float32", device=self.device)
                 model_out = model.sample(x_t=x_t_dl, t=t_dl, **z)
             x0_hat_t = dlpack_backend(model_out, backend='numpy', dtype="float32") + x_t if self.delta else dlpack_backend(model_out, backend='numpy', dtype="float32")

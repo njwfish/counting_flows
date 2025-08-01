@@ -1,5 +1,5 @@
 # Skellam Bridge Configuration
-_target_: bridges.numpy.skellam.SkellamBridge
+_target_: bridges.cupy.skellam.SkellamBridge
 
 # Bridge parameters
 n_steps: ${n_steps}

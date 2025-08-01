@@ -1,12 +1,12 @@
 defaults:
   - bridge: skellam
-  - model: coral
+  - model: dfm
   - architecture: mlp
-  - architecture/in_dims: standard
+  - architecture/in_dims: with_context
   - architecture/out_dim: discrete
   - dataset: poisson_mixture
   - training: default
-  - slack_sampler: bessel
+  - slack_sampler: const
   - _self_
 
 # override min_value and max_value in model/cross_entropy.yaml

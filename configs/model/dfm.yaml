@@ -1,6 +1,8 @@
 # ARDigit Model Configuration
-_target_: models.coral.CORALLoss
+_target_: models.dfm.DFMLoss
 
 architecture: ${architecture}  # MLP architecture 
 min_value: ${dataset.min_value}
 value_range: ${dataset.value_range}
+num_steps: 10
+context_dim: 1
