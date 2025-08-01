@@ -2,6 +2,7 @@ import cupy as cp
 from typing import Callable
 from .scheduling import make_weight_schedule
 from .utils import dlpack_backend
+from cupyx.scipy.special import logsumexp
 
 class SkellamBridge:
     """
@@ -46,6 +47,7 @@ class SkellamBridge:
             M = self.slack_sampler(diff)
             N_1 = cp.abs(diff) + 2 * M
             B_1 = (N_1 + diff) // 2
+            # assert cp.all((N_1 + diff) % 2 == 0), "N_1 + diff should be even"
 
             if t_target is not None:
                 # find closest time point
@@ -78,6 +80,7 @@ class SkellamBridge:
 
             diff_t = cp.abs(x_t - x_0)
             M_t    = (N_t - diff_t) // 2
+            # assert cp.all((N_t - diff_t) % 2 == 0), "N_t - diff_t should be even"
 
             x_t, M_t, t, x_0 = dlpack_backend(x_t, M_t, t, x_0, backend=self.backend, dtype="float32")
             out_dict = {
@@ -114,11 +117,15 @@ class SkellamBridge:
                     if not self.slack_sampler.markov:
                         M_t = self.slack_sampler(x_t)
 
+                print("t", k, self.time_points[k])
+
                 t = cp.broadcast_to(self.time_points[k], (b, 1))
-                x_t_dl, M_t_dl, t_dl = dlpack_backend(x_t, M_t, t, backend=self.backend, dtype="float32")
+                
                 if not self.slack_sampler.markov:
+                    x_t_dl, M_t_dl, t_dl = dlpack_backend(x_t, M_t, t, backend=self.backend, dtype="float32")
                     model_out = model.sample(x_t=x_t_dl, M_t=M_t_dl, t=t_dl, **z)
                 else:
+                    x_t_dl, t_dl = dlpack_backend(x_t, t, backend=self.backend, dtype="float32")
                     model_out = model.sample(x_t=x_t_dl, t=t_dl, **z)
                 x0_hat_t = cp.from_dlpack(model_out) + x_t if self.delta else cp.from_dlpack(model_out)
 
@@ -132,8 +139,10 @@ class SkellamBridge:
                 if M_t is None:
                     M_t = self.slack_sampler(diff)
 
-                N_t         = cp.abs(diff) + 2 * M_t
-                B_t         = (N_t + diff) // 2
+                N_t = cp.abs(diff) + 2 * M_t
+                B_t = (N_t + diff) // 2
+                # post correction should be even
+                # assert cp.all((N_t + diff) % 2 == 0), "N_t + diff should be even"
 
                 ρ = (self.weights[k-1] / self.weights[k])
                 non_zero = N_t > 0
@@ -150,12 +159,14 @@ class SkellamBridge:
 
                 x_s = x_t - 2 * (B_t - B_s) + (N_t - N_s)
                 diff_s = cp.abs(x_s - x0_hat_t)
-                M_s = (N_s - diff_s) // 2  
+                # since we corrected above this should be fine
+                M_s = (N_s - diff_s) // 2 
+                # assert cp.all((N_s - diff_s) % 2 == 0), "N_s - diff_s should be even"
 
                 return x_s, M_s, x0_hat_t
             
-            M_t = self.slack_sampler(x_1)
-            x_t, M_t, x0_hat_t = sample_step(self.n_steps, x_t, M_t, **z)
+            
+            x_t, M_t, x0_hat_t = sample_step(self.n_steps, x_t, None, **z)
 
             traj, xhat_traj, M_traj = [x_t], [x0_hat_t], [M_t]
             for k in range(self.n_steps - 1, 0, -1):
@@ -171,3 +182,5 @@ class SkellamBridge:
             if return_x_hat:      outs.append(cp.stack(xhat_traj))
             if return_M:          outs.append(cp.stack(M_traj))
             return dlpack_backend(*outs, backend=self.backend, dtype="float32") if len(outs) > 1 else dlpack_backend(x_t, backend=self.backend, dtype="float32") 
+
+

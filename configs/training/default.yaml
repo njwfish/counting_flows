@@ -12,7 +12,7 @@ weight_decay: 0.0
 device: ${device}
 
 # DataLoader parameters
-batch_size: 128
+batch_size: 256
 shuffle: true
 num_workers: 0
 

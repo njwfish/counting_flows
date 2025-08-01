@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 import pickle
 import cupy as cp
+from torch.utils.data import random_split
 
 # Capture original working directory before Hydra changes it
 ORIGINAL_CWD = Path.cwd().resolve()
@@ -132,9 +133,19 @@ def main(cfg: DictConfig) -> None:
     dataset = hydra.utils.instantiate(cfg.dataset)
     model = hydra.utils.instantiate(cfg.model)
     
+    # Create train/eval split
+    train_split = cfg.get('train_split', 0.8)  # Default 80% train, 20% eval
+    train_size = int(train_split * len(dataset))
+    eval_size = len(dataset) - train_size
+    
+    train_dataset, eval_dataset = random_split(
+        dataset, [train_size, eval_size], 
+        generator=torch.Generator().manual_seed(cfg.seed)  # Reproducible split
+    )
+    
     logging.info(f"Experiment: {cfg.experiment.name}")
     logging.info(f"Model: {type(model).__name__} ({sum(p.numel() for p in model.parameters()):,} params)")
-    logging.info(f"Dataset: {len(dataset)} samples, {dataset.data_dim}D")
+    logging.info(f"Dataset: {len(dataset)} samples ({len(train_dataset)} train, {len(eval_dataset)} eval), {dataset.data_dim}D")
     
     # Training
     if not training_complete:
@@ -157,7 +168,7 @@ def main(cfg: DictConfig) -> None:
             trainer.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             logging.info(f"Resuming from epoch {trainer.start_epoch}")
         
-        trained_model, losses = trainer.train(model=model, bridge=bridge, dataset=dataset)
+        trained_model, losses = trainer.train(model=model, bridge=bridge, dataset=train_dataset)
     else:
         logging.info("Training already complete, loading model...")
         model.load_state_dict(checkpoint['model_state_dict'])
@@ -176,8 +187,8 @@ def main(cfg: DictConfig) -> None:
     if cfg.get('create_plots', True):
         logging.info("Generating evaluation and plots...")
         
-        # Generate evaluation data
-        eval_data = generate_evaluation_data(trained_model, bridge, dataset, n_samples=1000)
+        # Generate evaluation data using eval split
+        eval_data = generate_evaluation_data(trained_model, bridge, eval_dataset, n_samples=min(10_000, len(eval_dataset)))
         metrics = compute_evaluation_metrics(eval_data)
         log_evaluation_summary(eval_data, metrics)
 
@@ -199,6 +210,12 @@ def main(cfg: DictConfig) -> None:
         sample_figs = plot_model_samples(eval_data, title="Generated Samples")
         plots['model_trajectories'] = sample_figs['trajectories']
         plots['model_distributions'] = sample_figs['distributions']
+        
+        # Add 2D plots if available
+        if '2d_trajectories' in sample_figs:
+            plots['model_2d_trajectories'] = sample_figs['2d_trajectories']
+        if '2d_time_evolution' in sample_figs:
+            plots['model_2d_time_evolution'] = sample_figs['2d_time_evolution']
         
         # Save plots
         plots_dir = output_dir / "plots"

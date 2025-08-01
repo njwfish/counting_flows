@@ -1,0 +1,3 @@
+  _target_: bridges.numpy.slack_samplers.ConstantM
+  m: 16
+  markov: true

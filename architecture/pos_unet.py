@@ -236,25 +236,22 @@ class PositionalUNet(nn.Module):
         self.pos_embeddings = nn.Parameter(torch.randn(self.output_dim, hidden_dim))
         
         # Create encoder during init
-        if encoder_input_dim > 0:
-            if encoder_type == "mlp":
-                self.encoder = MLPEncoder(
+        if encoder_type == "mlp":
+            self.encoder = MLPEncoder(
                     input_dim=encoder_input_dim,
-                    hidden_dim=hidden_dim,
-                    layers=encoder_layers,
-                )
-            elif encoder_type == "bert":
-                self.encoder = BERTEncoder(
+                hidden_dim=hidden_dim,
+                layers=encoder_layers,
+            )
+        elif encoder_type == "bert":
+            self.encoder = BERTEncoder(
                     input_dim=encoder_input_dim,
-                    hidden_dim=hidden_dim,
-                    layers=encoder_layers,
-                    num_heads=num_heads,
-                    dropout=dropout,
-                )
-            else:
-                raise ValueError(f"Unknown encoder_type: {encoder_type}")
+                hidden_dim=hidden_dim,
+                layers=encoder_layers,
+                num_heads=num_heads,
+                dropout=dropout,
+            )
         else:
-            self.encoder = None  # No encoder inputs
+            raise ValueError(f"Unknown encoder_type: {encoder_type}")
         
         # Create decoder during init  
         decoder_input_dim = hidden_dim + broadcast_input_dim + hidden_dim + encoder_input_dim // self.output_dim
@@ -318,11 +315,7 @@ class PositionalUNet(nn.Module):
         # This ensures our init-time calculations were correct
         
         # ENCODE: Create global context (polymorphic!)
-        if encoder_inputs.shape[1] > 0 and self.encoder is not None:
-            encoder_latent = self.encoder(encoder_inputs)  # (batch_size, hidden_dim)
-        else:
-            # No encoder inputs - create zero latent
-            encoder_latent = torch.zeros(batch_size, self.hidden_dim, device=next(self.parameters()).device)
+        encoder_latent = self.encoder(encoder_inputs)  # (batch_size, hidden_dim)
         
         # Prepare standardized decoder inputs
         encoder_latent_expanded = encoder_latent.unsqueeze(1).expand(-1, self.output_dim, -1)

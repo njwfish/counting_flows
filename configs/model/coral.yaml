@@ -1,0 +1,6 @@
+# ARDigit Model Configuration
+_target_: models.coral.CORALLoss
+
+architecture: ${architecture}  # MLP architecture 
+min_value: ${dataset.min_value}
+value_range: ${dataset.value_range}

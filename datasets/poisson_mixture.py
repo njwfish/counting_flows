@@ -28,6 +28,7 @@ class PoissonMixtureDataset(Dataset):
         k: int = 3,
         lambda_loc: float = 20.0,
         lambda_scale: float = 20.0,
+        seed: int = 42,
     ):
         """
         Args:
@@ -44,7 +45,8 @@ class PoissonMixtureDataset(Dataset):
         self.k = k
         self.lambda_scale = lambda_scale
         self.lambda_loc = lambda_loc
-        
+        self.seed = seed
+
         print(f"Pre-sampling {size} samples with d={data_dim}, k={k}...")
         
         # Pre-sample all data
@@ -73,13 +75,15 @@ class PoissonMixtureDataset(Dataset):
         """Sample new mixture parameters"""
         # Sample lambda matrices using Normal to ensure positivity
         # Shape: (k, d) for both source and target
-        normal = Normal(scale=self.lambda_scale, loc=self.lambda_loc)
-        lambda_source = torch.abs(normal.sample((self.k, self.data_dim)))  # [k, d]
-        lambda_target = torch.abs(normal.sample((self.k, self.data_dim)))  # [k, d]
-        
-        # Sample mixture weights using Dirichlet
-        weights_source = Dirichlet(torch.ones(self.k)).sample()  # [k]
-        weights_target = Dirichlet(torch.ones(self.k)).sample()  # [k]
+        # set fixed rng for just this dataset
+        with torch.random.fork_rng():
+            torch.manual_seed(self.seed)
+            # any sampling here uses the seeded global state
+            normal = torch.distributions.Normal(self.lambda_loc, self.lambda_scale)
+            lambda_source = torch.abs(normal.sample((self.k, self.data_dim)))
+            lambda_target = torch.abs(normal.sample((self.k, self.data_dim)))
+            weights_source = torch.distributions.Dirichlet(torch.ones(self.k)).sample()
+            weights_target = torch.distributions.Dirichlet(torch.ones(self.k)).sample()
         
         return lambda_source, lambda_target, weights_source, weights_target
     

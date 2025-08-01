@@ -13,6 +13,7 @@ from typing import List, Optional, Dict, Any, Tuple
 import logging
 import seaborn as sns
 import pandas as pd
+from matplotlib.colors import LinearSegmentedColormap
 
 def plot_loss_curve(losses: List[float], title: str = "Training Loss") -> plt.Figure:
     """Plot the training loss curve"""
@@ -108,6 +109,157 @@ def plot_generation_analysis(
     return fig
 
 
+def plot_2d_trajectories(
+    eval_data: Dict[str, Any], 
+    title: str = "2D Flow Trajectories",
+    n_trajectories: int = 50
+) -> plt.Figure:
+    """
+    Clean 2D trajectory visualization showing actual paths from start to end.
+    
+    Args:
+        eval_data: Dictionary from evaluation containing trajectories and targets
+        title: Plot title
+        n_trajectories: Number of individual trajectories to show
+    """
+    # Extract data
+    x0_target = eval_data['x0_target']  # [B, 2]
+    trajectory = eval_data['x_trajectory']  # [T, B, 2]
+    
+    if x0_target.shape[1] != 2:
+        # Not 2D data, return empty figure
+        fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+        ax.text(0.5, 0.5, f"2D plot not applicable\n(data is {x0_target.shape[1]}D)", 
+                ha='center', va='center', transform=ax.transAxes)
+        ax.set_title(title)
+        return fig
+    
+    # Single plot for trajectories
+    fig, ax = plt.subplots(1, 1, figsize=(10, 8))
+    fig.suptitle(title, fontsize=16)
+    
+    # Select random trajectories to display
+    n_show = min(n_trajectories, trajectory.shape[1])
+    indices = np.random.choice(trajectory.shape[1], n_show, replace=False)
+    
+    # Create colormap for time progression (blue to red)
+    cmap = plt.cm.plasma
+    
+    for i in indices:
+        traj_path = trajectory[:, i, :]  # [T, 2]
+        T = len(traj_path)
+        
+        # Plot complete trajectory as connected line with color progression
+        colors = [cmap(t / (T - 1)) for t in range(T)]
+        
+        # Plot the full trajectory line
+        ax.plot(traj_path[:, 0], traj_path[:, 1], 
+               color=colors[T//2], alpha=0.4, linewidth=1, zorder=1)
+        
+        # Add color-coded points along the trajectory
+        for t in range(0, T, max(1, T//10)):  # Sample points along trajectory
+            ax.scatter(traj_path[t, 0], traj_path[t, 1], 
+                      c=[colors[t]], s=8, alpha=0.6, zorder=2)
+    
+    # Add distinctive start and end markers for subset of trajectories
+    n_markers = min(15, n_show)
+    marker_indices = indices[:n_markers]
+    
+    start_points = trajectory[0, marker_indices, :]  # [n_markers, 2]
+    end_points = trajectory[-1, marker_indices, :]   # [n_markers, 2]
+    
+    ax.scatter(start_points[:, 0], start_points[:, 1], 
+              c='blue', s=80, marker='o', alpha=0.9, 
+              label='Start (t=1)', zorder=5, edgecolors='white', linewidth=2)
+    ax.scatter(end_points[:, 0], end_points[:, 1], 
+              c='red', s=80, marker='s', alpha=0.9, 
+              label='End (t=0)', zorder=5, edgecolors='white', linewidth=2)
+    
+    ax.set_xlabel('Dimension 0', fontsize=12)
+    ax.set_ylabel('Dimension 1', fontsize=12) 
+    ax.set_title('Sample Flow Trajectories', fontsize=14)
+    ax.legend(fontsize=12)
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    return fig
+
+
+def plot_2d_time_evolution(
+    eval_data: Dict[str, Any], 
+    title: str = "2D Evolution Over Time"
+) -> plt.Figure:
+    """
+    Show x_t and x̂ distributions at key time points in 2x4 grid.
+    
+    Args:
+        eval_data: Dictionary from evaluation containing trajectories
+        title: Plot title
+    """
+    # Extract data
+    x0_target = eval_data['x0_target']  # [B, 2]
+    x_trajectory = eval_data['x_trajectory']  # [T, B, 2]
+    x_hat_trajectory = eval_data.get('x_hat_trajectory', None)  # [T, B, 2]
+    
+    if x0_target.shape[1] != 2:
+        # Not 2D data, return empty figure
+        fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+        ax.text(0.5, 0.5, f"2D plot not applicable\n(data is {x0_target.shape[1]}D)", 
+                ha='center', va='center', transform=ax.transAxes)
+        ax.set_title(title)
+        return fig
+    
+    # Create 2x4 subplot layout
+    has_xhat = x_hat_trajectory is not None
+    n_rows = 2 if has_xhat else 1
+    fig, axes = plt.subplots(n_rows, 4, figsize=(16, 8 if has_xhat else 4))
+    if n_rows == 1:
+        axes = axes.reshape(1, -1)
+    fig.suptitle(title, fontsize=16)
+    
+    # Time points: t=1, 0.75, 0.25, 0
+    time_values = [1.0, 0.75, 0.25, 0.0]
+    time_indices = [
+        0,  # t=1
+        len(x_trajectory) // 4,  # t=0.75
+        3 * len(x_trajectory) // 4,  # t=0.25  
+        -1  # t=0
+    ]
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
+    
+    # Top row: x_t distributions
+    for i, (t_val, t_idx, color) in enumerate(zip(time_values, time_indices, colors)):
+        ax = axes[0, i]
+        points = x_trajectory[t_idx, :, :]  # [B, 2]
+        
+        ax.scatter(points[:, 0], points[:, 1], 
+                  c=color, alpha=0.3, s=10)
+        
+        ax.set_xlabel('Dimension 0', fontsize=10)
+        if i == 0:
+            ax.set_ylabel('Dimension 1', fontsize=10)
+        ax.set_title(f'x_t at t={t_val}', fontsize=12)
+        ax.grid(True, alpha=0.3)
+    
+    # Bottom row: x̂ distributions (if available)
+    if has_xhat:
+        for i, (t_val, t_idx, color) in enumerate(zip(time_values, time_indices, colors)):
+            ax = axes[1, i]
+            points = x_hat_trajectory[t_idx, :, :]  # [B, 2]
+            
+            ax.scatter(points[:, 0], points[:, 1], 
+                      c=color, alpha=0.3, s=10)
+            
+            ax.set_xlabel('Dimension 0', fontsize=10)
+            if i == 0:
+                ax.set_ylabel('Dimension 1', fontsize=10)
+            ax.set_title(f'x̂ at t={t_val}', fontsize=12)
+            ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    return fig
+
+
 def plot_full_reverse_trajectories(
     eval_data: Dict[str, Any],
     title: str = "Full Reverse Trajectories"
@@ -138,7 +290,14 @@ def plot_full_reverse_trajectories(
     fig.suptitle(title, fontsize=16)
     
     B, d = x0_target.shape
-    n_dims_to_plot = min(4, d)
+    # Limit dimensions intelligently - show first few dimensions for high-d data
+    if d <= 4:
+        n_dims_to_plot = d
+        dim_indices = list(range(d))
+    else:
+        n_dims_to_plot = 4  
+        # For high-d data, show first 2 and last 2 dimensions
+        dim_indices = [0, 1, d-2, d-1]
     
     # Plot configurations for each trajectory type
     plot_configs = {
@@ -153,8 +312,9 @@ def plot_full_reverse_trajectories(
         time_steps = np.linspace(1.0, 0.0, len(traj_data))
         config = plot_configs[traj_key]
         
-        for dim in range(n_dims_to_plot):
-            ax = axes[row_idx, dim]
+        for plot_dim_idx in range(n_dims_to_plot):
+            dim = dim_indices[plot_dim_idx]  # Actual dimension index
+            ax = axes[row_idx, plot_dim_idx]
             
             # Plot individual trajectories with low alpha
             for b in range(min(B, 1000)):  # Limit for performance
@@ -163,7 +323,8 @@ def plot_full_reverse_trajectories(
             
             # Plot percentiles for summary statistics
             percentiles = np.percentile(traj_data[:, :, dim], [10, 25, 50, 75, 90], axis=1)
-            ax.plot(time_steps, percentiles[2], config['color'], linewidth=2, label=f"Median {config['label']}")
+            mean = np.mean(traj_data[:, :, dim], axis=1)
+            ax.plot(time_steps, mean, config['color'], linewidth=2, label=f"Mean {config['label']}")
             ax.fill_between(time_steps, percentiles[1], percentiles[3], 
                            alpha=0.4, color=config['color'], label='25-75%')
             ax.fill_between(time_steps, percentiles[0], percentiles[4], 
@@ -291,9 +452,9 @@ def plot_bridge_marginals(x0_batch: torch.Tensor, x1_batch: torch.Tensor,
                 for i in range(min(data.shape[1], 100)):  # Limit for performance
                     ax.plot(times, data[:, i, dim], config['color'], alpha=0.3, linewidth=1)
                 
-                # Plot median trajectory
-                median_traj = np.median(data[:, :, dim], axis=1)
-                ax.plot(times, median_traj, config['color'], linewidth=3, label=f"Median {config['label']}")
+                # Plot mean trajectory
+                mean_traj = np.mean(data[:, :, dim], axis=1)
+                ax.plot(times, mean_traj, config['color'], linewidth=3, label=f"Mean {config['label']}")
                 
                 # Add reference lines for x_t
                 if plot_key == 'x_t':
@@ -454,23 +615,39 @@ def plot_model_samples(
         title: Base title for plots
         
     Returns:
-        Dictionary with 'trajectories' and 'distributions' figures
+        Dictionary with 'trajectories', 'distributions', and optionally '2d_trajectories' and '2d_time_evolution' figures
     """
     figures = {}
     
-    # 1. Trajectory plot
+    # Check if this is 2D data
+    data_dim = eval_data['x0_target'].shape[1]
+    is_2d = (data_dim == 2)
+    
+    # 1. Trajectory plot (always included)
     figures['trajectories'] = plot_full_reverse_trajectories(
         eval_data=eval_data,
         title=f"{title} - Trajectories"
     )
     
-    # 2. Distribution comparison
+    # 2. Distribution comparison (always included)
     figures['distributions'] = plot_distribution_comparison(
         x0_target=eval_data['x0_target'],  # Target is x0 (what we want to generate)
         x1_source=eval_data['x1_batch'],  # Source is x1 (what we start reverse sampling from)
         x0_generated=eval_data['x0_generated'],  # Generated is our model output
         title=f"{title} - Distribution Comparison"
     )
+    
+    # 3. Special 2D plots (only for 2D data)
+    if is_2d:
+        figures['2d_trajectories'] = plot_2d_trajectories(
+            eval_data=eval_data,
+            title=f"{title} - 2D Flow Trajectories"
+        )
+        figures['2d_time_evolution'] = plot_2d_time_evolution(
+            eval_data=eval_data,
+            title=f"{title} - 2D Time Evolution"
+        )
+        logging.info("Generated 2D trajectory and time evolution plots for 2D dataset")
     
     return figures
 

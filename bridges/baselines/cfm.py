@@ -8,7 +8,7 @@ import torch
 
 
 class CFMBridge:
-    def __init__(self, n_steps, fm_type="cfm", ot_type="exact", sigma=0.1, device=0):
+    def __init__(self, n_steps, fm_type="cfm", ot_type="exact", sigma=1.0, device=0):
         self.n_steps = n_steps
         self.fm_type = fm_type
         self.ot_type = ot_type

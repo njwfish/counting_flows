@@ -87,7 +87,6 @@ class DiscreteFlowBridge:
             Optional: trajectory, x_hat predictions based on flags
         """
         batch_size, data_dim = x_1.shape
-        vocab_size = 128  # Fixed vocab size
         
         # Forward sampling loop using exactly n_steps
         # Start from x_1 like other flow methods
@@ -104,12 +103,12 @@ class DiscreteFlowBridge:
             # Get model predictions (logits)
             t_tensor = torch.full((batch_size, 1), t, device=x_t.device)
             with torch.no_grad():
-                logits = model.forward({"x_t": x_t, "t": t_tensor, **z})
+                logits = model.forward({"x_t": x_t.float(), "t": t_tensor, **z})
                 
             # Sample from predicted distribution
             p1 = torch.softmax(logits, dim=-1)
             
-            one_hot_x_t = torch.nn.functional.one_hot(x_t, vocab_size).float()
+            one_hot_x_t = torch.nn.functional.one_hot(x_t, p1.shape[-1]).float()
             
             # Flow field: (p1 - one_hot_x_t) / (1.0 - t)
             if t < 1.0 - 1e-6:  # Avoid division by zero at t=1

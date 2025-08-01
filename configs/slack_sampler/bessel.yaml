@@ -1,4 +1,4 @@
-  _target_: bridges.cupy.slack_samplers.BesselM
+  _target_: bridges.numpy.slack_samplers.BesselM
   lam_p: 8.0
   lam_m: 8.0
   markov: true

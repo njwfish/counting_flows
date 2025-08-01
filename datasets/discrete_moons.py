@@ -28,6 +28,7 @@ class DiscreteMoonsDataset(Dataset):
         offset: float = 50.0,
         noise: float = 0.05,
         data_dim: int = 2,
+        flip_moons: bool = False,
     ):
         """
         Args:
@@ -44,7 +45,7 @@ class DiscreteMoonsDataset(Dataset):
         self.offset = offset
         self.noise = noise
         self.data_dim = data_dim
-
+        self.flip_moons = flip_moons
         
         print(f"Pre-sampling {size} discrete moons samples with range={value_range}...")
         
@@ -90,11 +91,12 @@ class DiscreteMoonsDataset(Dataset):
     def _pre_sample_all_data(self):
         """Pre-sample all source and target data at initialization"""
         # Generate 8 gaussians data for x_0 (source)
-        gaussians_data = self._make_8_gaussians(self.size, noise=4 *self.noise)
+        gaussians_data = self._make_8_gaussians(self.size, noise=self.noise)
         self.x1_data = self._discretize_data(gaussians_data)
         
         # Generate 2 moons data for x_1 (target)
         moons_data, _ = make_moons(self.size, noise=self.noise)
+        moons_data = moons_data - np.array([0.5, 0.25])
         self.x0_data = self._discretize_data(moons_data)
     
     def __len__(self) -> int:
@@ -105,6 +107,11 @@ class DiscreteMoonsDataset(Dataset):
         """Return pre-computed sample"""
         # For target, use random pairing like in original dataset
         target_idx = np.random.randint(0, self.size)
+        if self.flip_moons:
+            return {
+                'x_0': self.x1_data[idx],
+                'x_1': self.x0_data[target_idx]
+            } 
         return {
             'x_0': self.x0_data[idx],
             'x_1': self.x1_data[target_idx]

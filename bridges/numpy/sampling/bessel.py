@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.special import iv, gammaln
 
-def sample_bessel_devroye(alpha, beta, d, n_samples, rng=None):
+def sample_bessel_devroye(alpha, beta, d, n_samples=None, rng=None):
     """
     Devroye’s exact O(1)-time rejection sampler for
     P[M=m | B1−D1=d] ∝ (αβ)^{m + d/2}/(m!(m+d)!) / I_d(2√(αβ)).
@@ -25,6 +25,7 @@ def sample_bessel_devroye(alpha, beta, d, n_samples, rng=None):
     width = 2.0*w / p0
 
     # 4) Rejection loop
+    shape = alpha.shape if n_samples is None else alpha.shape + (n_samples,)
     M = np.empty(n_samples, dtype=int)
     done = np.zeros(n_samples, dtype=bool)
 
