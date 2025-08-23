@@ -76,9 +76,7 @@ class SkellamMeanConstrainedBridge:
             M_t    = (N_t - cp.abs(diff_t)) // 2
 
             x_t, M_t, t, x_0 = dlpack_backend(x_t, M_t, t, x_0, backend=self.backend, dtype="float32")
-            # cp.get_default_memory_pool().free_all_blocks()
-            # cp.get_default_pinned_memory_pool().free_all_blocks()
-            # cp.cuda.Stream.null.synchronize()
+
             out_dict = {
                 "inputs": {
                     "x_t": x_t,

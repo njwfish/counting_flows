@@ -1,0 +1,9 @@
+# Poisson Mixture Dataset Configuration
+_target_: datasets.normal_deconv.DeconvolutionNormalDataset
+
+# Dataset parameters
+size: 50000  # total samples in dataset (pre-sampled for speed)
+data_dim: 2
+value_range: 128
+min_value: 0
+context_dim: 4

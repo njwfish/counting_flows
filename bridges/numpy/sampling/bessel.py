@@ -7,6 +7,11 @@ def sample_bessel_devroye(alpha, beta, d, n_samples=None, rng=None):
     P[M=m | B1−D1=d] ∝ (αβ)^{m + d/2}/(m!(m+d)!) / I_d(2√(αβ)).
     """
     rng = np.random.default_rng() if rng is None else rng
+    if isinstance(alpha, float):
+        alpha = np.ones_like(d) * alpha
+    if isinstance(beta, float):
+        beta = np.ones_like(d) * beta
+
     λ = alpha * beta
     # 1) Locate the (unique) mode m0
     m0 = int(np.floor((np.sqrt(4*λ + d*d) - d) / 2))

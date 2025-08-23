@@ -20,8 +20,8 @@ def generate_evaluation_data(model: torch.nn.Module, bridge: Any, dataset: Any,
     dataloader = DataLoader(dataset, batch_size=n_samples, shuffle=False)
     batch = next(iter(dataloader))
     
-    x0_target = batch['x_0'].numpy()
-    x1_source = batch['x_1'].numpy()
+    x0_target = batch['x_0'].numpy().reshape(-1, batch['x_0'].shape[-1])
+    x1_source = batch['x_1'].numpy().reshape(-1, batch['x_1'].shape[-1])
     
     # Convert to torch tensors only for bridge call
     x0_torch = torch.tensor(x0_target).cuda()
@@ -40,6 +40,9 @@ def generate_evaluation_data(model: torch.nn.Module, bridge: Any, dataset: Any,
             'return_trajectory': True,
             'return_x_hat': True,
         }
+        if 'z' in batch:
+            z = batch['z'].numpy().reshape(-1, batch['z'].shape[-1])
+            sampler_kwargs['z'] = {'z': torch.tensor(z).cuda()}
 
         if has_M:
             sampler_kwargs['return_M'] = True

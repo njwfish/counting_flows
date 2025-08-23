@@ -1,0 +1,20 @@
+# Low-Rank Gaussian Mixture Dataset Configuration - 10D with latent 3D
+_target_: datasets.gaussian_mixture.LowRankGaussianMixtureDataset
+
+# Dataset parameters
+size: 50000  # total samples in dataset (pre-sampled for speed)
+data_dim: 50  # output dimensionality (d)
+latent_dim: 3  # latent dimensionality (r, should be < data_dim)
+value_range: 256
+min_value: 0
+
+# Mixture parameters
+k: 5  # number of mixture components
+mean_scale: 20.0  # scale for sampling mixture component means in latent space
+cov_scale: 10.0  # scale for sampling covariance eigenvalues in latent space
+noise_scale: 1.0  # scale of isotropic noise added after projection
+projection_scale: 1.0  # scale of random projection matrix
+min_eigenvalue: 0.1  # minimum eigenvalue to ensure positive definiteness
+
+# Random seed for reproducibility
+seed: 42

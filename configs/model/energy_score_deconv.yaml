@@ -1,0 +1,12 @@
+# Energy Score Loss Configuration
+_target_: models.energy_deconv.DeconvolutionEnergyScoreLoss
+
+# Architecture (use MLP by default)
+architecture: ${architecture}
+
+# Energy score parameters
+noise_dim: 16
+m_samples: 16
+lambda_energy: 1.0
+min_value: ${dataset.min_value}
+value_range: ${dataset.value_range}

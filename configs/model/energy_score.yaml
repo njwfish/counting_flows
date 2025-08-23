@@ -5,6 +5,6 @@ _target_: models.energy.EnergyScoreLoss
 architecture: ${architecture}
 
 # Energy score parameters
-noise_dim: 16
+noise_dim: 100
 m_samples: 16
 lambda_energy: 1.0

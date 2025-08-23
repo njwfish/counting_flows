@@ -8,4 +8,4 @@ homogeneous_time: false
 
 # Slack sampler configuration
 slack_sampler: ${slack_sampler}
-delta: true
+delta: false
