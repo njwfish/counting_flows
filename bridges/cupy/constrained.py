@@ -75,9 +75,9 @@ class SkellamMeanConstrainedBridge:
             M_t    = (N_t - cp.abs(diff_t)) // 2
 
             out = dlpack_backend(x_t, M_t, t, backend=self.backend, dtype="float32")
-            # cp.get_default_memory_pool().free_all_blocks()
-            # cp.get_default_pinned_memory_pool().free_all_blocks()
-            # cp.cuda.Stream.null.synchronize()
+            cp.get_default_memory_pool().free_all_blocks()
+            cp.get_default_pinned_memory_pool().free_all_blocks()
+            cp.cuda.Stream.null.synchronize()
             return out
 
     def reverse_sampler(
