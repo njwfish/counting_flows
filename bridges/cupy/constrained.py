@@ -18,7 +18,7 @@ class SkellamMeanConstrainedBridge:
     def __init__(
         self,
         n_steps: int,
-        m_sampler: Callable,
+        slack_sampler: Callable,
         schedule_type: str = "linear",
         mh_sweeps: int = 75,
         backend: str = "torch",
@@ -29,7 +29,7 @@ class SkellamMeanConstrainedBridge:
         self.n_steps         = n_steps
         self.mh_sweeps       = mh_sweeps
         self.backend         = backend
-        self.m_sampler       = m_sampler
+        self.slack_sampler   = slack_sampler
         self.schedule_type   = schedule_type
 
         with cp.cuda.Device(self.device):
@@ -47,7 +47,7 @@ class SkellamMeanConstrainedBridge:
 
             # latent (N, M, B1)
             diff = x_1 - x_0
-            M = self.m_sampler(diff)
+            M = self.slack_sampler(diff)
             N_1 = cp.abs(diff) + 2 * M
             B_1 = (N_1 + diff) // 2
 
@@ -113,8 +113,8 @@ class SkellamMeanConstrainedBridge:
 
             def sample_step(k, x_t, M_t=None, **z):
                 if M_t is None:
-                    if not self.m_sampler.markov:
-                        M_t = self.m_sampler(x_t)
+                    if not self.slack_sampler.markov:
+                        M_t = self.slack_sampler(x_t)
 
                 t = cp.broadcast_to(self.time_points[k], (b, 1))
 
@@ -132,7 +132,7 @@ class SkellamMeanConstrainedBridge:
 
                 # the markov sampler requires the diff to sample M_t
                 if M_t is None:
-                    M_t = self.m_sampler(diff)
+                    M_t = self.slack_sampler(diff)
                 N_t         = cp.abs(diff) + 2 * M_t
                 B_t         = (N_t + diff) // 2
 
