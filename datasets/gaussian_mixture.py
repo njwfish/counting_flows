@@ -68,12 +68,12 @@ class GaussianMixtureDataset(Dataset):
         self.x1_data = torch.zeros(self.size, self.data_dim, dtype=torch.int32)
         
         # Sample mixture parameters
-        (means_source, covs_source, weights_source, 
-         means_target, covs_target, weights_target) = self._sample_parameters()
+        (self.means_source, self.covs_source, self.weights_source, 
+         self.means_target, self.covs_target, self.weights_target) = self._sample_parameters()
         
-        # Generate all samples vectorized
-        self.x0_data = self._sample_from_mixture_vectorized(means_source, covs_source, weights_source, self.size)
-        self.x1_data = self._sample_from_mixture_vectorized(means_target, covs_target, weights_target, self.size)
+        # Generate all samples vectorized and track component assignments
+        self.x0_data, self.x0_components = self._sample_from_mixture_vectorized(self.means_source, self.covs_source, self.weights_source, self.size)
+        self.x1_data, self.x1_components = self._sample_from_mixture_vectorized(self.means_target, self.covs_target, self.weights_target, self.size)
     
     def _sample_parameters(self):
         """Sample new mixture parameters with scalable priors"""
@@ -117,7 +117,7 @@ class GaussianMixtureDataset(Dataset):
         return covs
     
     def _sample_from_mixture_vectorized(self, means: torch.Tensor, covs: torch.Tensor, 
-                                       weights: torch.Tensor, num_samples: int) -> torch.Tensor:
+                                       weights: torch.Tensor, num_samples: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Vectorized sampling from mixture of Gaussians
         
@@ -129,6 +129,7 @@ class GaussianMixtureDataset(Dataset):
         
         Returns:
             Batch of integer-ized samples [num_samples, data_dim]
+            Component assignments [num_samples]
         """
         # Sample which components to use for each sample
         components = torch.multinomial(weights, num_samples, replacement=True)
@@ -151,7 +152,7 @@ class GaussianMixtureDataset(Dataset):
         samples = torch.round(samples)
         samples = self._reflect_boundaries(samples)
         
-        return samples.int()
+        return samples.int(), components
     
     def _reflect_boundaries(self, samples: torch.Tensor) -> torch.Tensor:
         """
@@ -264,14 +265,14 @@ class LowRankGaussianMixtureDataset(Dataset):
         self.x1_data = torch.zeros(self.size, self.data_dim, dtype=torch.int32)
         
         # Sample mixture parameters and projection matrices
-        (means_source, covs_source, weights_source, proj_source,
-         means_target, covs_target, weights_target, proj_target) = self._sample_parameters()
+        (self.means_source, self.covs_source, self.weights_source, self.proj_source,
+         self.means_target, self.covs_target, self.weights_target, self.proj_target) = self._sample_parameters()
         
-        # Generate all samples vectorized
-        self.x0_data = self._sample_from_low_rank_mixture(
-            means_source, covs_source, weights_source, proj_source, self.size)
-        self.x1_data = self._sample_from_low_rank_mixture(
-            means_target, covs_target, weights_target, proj_target, self.size)
+        # Generate all samples vectorized and track component assignments
+        self.x0_data, self.x0_components = self._sample_from_low_rank_mixture(
+            self.means_source, self.covs_source, self.weights_source, self.proj_source, self.size)
+        self.x1_data, self.x1_components = self._sample_from_low_rank_mixture(
+            self.means_target, self.covs_target, self.weights_target, self.proj_target, self.size)
     
     def _sample_parameters(self):
         """Sample mixture parameters in latent space and projection matrices"""
@@ -319,7 +320,7 @@ class LowRankGaussianMixtureDataset(Dataset):
     
     def _sample_from_low_rank_mixture(self, means: torch.Tensor, covs: torch.Tensor,
                                      weights: torch.Tensor, projection: torch.Tensor,
-                                     num_samples: int) -> torch.Tensor:
+                                     num_samples: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Sample from low-rank Gaussian mixture
         
@@ -332,6 +333,7 @@ class LowRankGaussianMixtureDataset(Dataset):
         
         Returns:
             Batch of integer-ized samples [num_samples, data_dim]
+            Component assignments [num_samples]
         """
         # Sample which components to use
         components = torch.multinomial(weights, num_samples, replacement=True)
@@ -359,7 +361,7 @@ class LowRankGaussianMixtureDataset(Dataset):
         samples = torch.round(samples)
         samples = self._reflect_boundaries(samples)
         
-        return samples.int()
+        return samples.int(), components
     
     def _reflect_boundaries(self, samples: torch.Tensor) -> torch.Tensor:
         """

@@ -55,13 +55,7 @@ class DiscreteFlowBridge:
         mask = torch.rand_like(x_0.float()) < t[:, None]
         x_t = torch.where(mask, x_0, x_1)
         
-        return {
-            "inputs": {
-                "x_t": x_t.float(),  # Discrete masked state
-                "t": t.unsqueeze(1),      # Time values (match CFM format)
-            },
-            "output": x_0.float(),   # Target for cross entropy loss
-        }
+        return t.unsqueeze(1), x_t.float(), x_0.float()
     
     def sampler(
         self,

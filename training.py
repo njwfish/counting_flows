@@ -92,20 +92,18 @@ class FlowTrainer:
         x_0 = batch['x_0'].to(self.device)  # Target counts
         x_1 = batch['x_1'].to(self.device)  # Source counts  
         z = batch.get('z', None)  # Conditioning (optional)
-        if z is not None:
-            z = z.to(self.device)
         
         # Apply bridge to get diffusion samples
-        bridge_output = bridge(x_0, x_1)
+        t, x_t, target = bridge(x_0, x_1)
         
         # Extract inputs and outputs from bridge
-        inputs = bridge_output['inputs']
-        target = bridge_output['output']
+        inputs = {
+            "t": t,
+            "x_t": x_t,
+        }
         
-        # Add conditioning to inputs if present
         if z is not None:
-            inputs = inputs.copy()  # Don't modify original
-            inputs['z'] = z
+            inputs['z'] = z.to(self.device)
         
         # Training step
         self.optimizer.zero_grad()

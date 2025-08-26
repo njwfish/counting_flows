@@ -36,13 +36,7 @@ class CFMBridge:
         if t_target is not None:
             t_target = torch.tensor(t_target).broadcast_to(x_0.shape[0], 1).to(x_0.device)
         t, x_t, u_t = self.fm.sample_location_and_conditional_flow(x_0, x_1, t=t_target)
-        return {
-            "inputs": {
-                "t": t.unsqueeze(1),
-                "x_t": x_t,
-            },
-            "output": u_t,
-        }
+        return t.unsqueeze(1), x_t.float(), u_t.float()
 
     def sampler(
         self,

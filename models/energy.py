@@ -46,13 +46,6 @@ class EnergyScoreLoss(nn.Module):
         
         return self.architecture(**inputs_with_noise)
 
-    def sample(self, **kwargs):
-        """
-        Sample prediction using arbitrary kwargs inputs.
-        """
-        prediction = self.forward(kwargs)
-        return prediction.round().long()
-
     def loss(self, target, inputs):
         """
         Empirical energy-score (Distrib. Diffusion Models eq.14):
@@ -96,5 +89,197 @@ class EnergyScoreLoss(nn.Module):
 
         return (term_conf - term_int).mean()
 
+    @torch.no_grad()
+    def sample(self, **kwargs):
+        """
+        Sample prediction using arbitrary kwargs inputs.
+        """
+        if 'sum_constraint' in kwargs:
+            S = kwargs['sum_constraint']
+            del kwargs['sum_constraint']
+            return self.conditional_sample(kwargs, target_sum=S)
+        elif 'mean_constraint' in kwargs:
+            M = kwargs['mean_constraint']
+            del kwargs['mean_constraint']
+            return self.conditional_sample(kwargs, target_mean=M)
+        else:
+            prediction = self.forward(kwargs)
+            return prediction.round().long()
 
+    @staticmethod
+    def _largest_remainder_round(x, target_sum):
+        """
+        x: [B, D] nonnegative float; target_sum: [B] int or float
+        Returns int counts y with row sums == target_sum and each |y_i - x_i| < 1.
+        """
+        B, D = x.shape
+        device = x.device
+        # Clamp negatives to zero before rounding
+        x = torch.clamp(x, min=0.0)
+        # Floor
+        y = torch.floor(x).to(torch.int64)           # [B, D]
+        # How many units still needed per row
+        current = y.sum(dim=1)                       # [B]
+        # If target_sum is float, round to nearest int
+        tgt = torch.round(target_sum).to(torch.int64)
+        rem = (tgt - current)                        # [B]
+        if (rem == 0).all():
+            return y
+        # Fractional parts
+        frac = (x - torch.floor(x))                  # [B, D]
+        # For each row, add +1 to top-k fractional entries where k=rem[b]
+        for b in torch.where(rem > 0)[0].tolist():
+            k = int(rem[b].item())
+            if k <= 0:
+                continue
+            # get indices of top-k fractional parts
+            idx = torch.topk(frac[b], k=min(k, D), largest=True).indices
+            y[b, idx] += 1
+        # For rows with rem<0 (rare due to rounding), remove from smallest frac
+        for b in torch.where(rem < 0)[0].tolist():
+            k = int((-rem[b]).item())
+            if k <= 0:
+                continue
+            idx = torch.topk(frac[b], k=min(k, D), largest=False).indices
+            # ensure nonnegativity
+            take = torch.clamp(y[b, idx], min=0)
+            y[b, idx] = torch.clamp(take - 1, min=0)
+        return y
 
+    @torch.no_grad()
+    def conditional_sample(
+        self,
+        inputs: dict,
+        target_sum: torch.Tensor = None,
+        target_mean: torch.Tensor = None,
+        iters: int = 3,
+        tol: float = 1e-6,
+        tau: float = 1e-8,
+        nonneg: bool = True,
+        return_float: bool = False,
+    ):
+        """
+        Minimal-norm latent correction (Gauss–Newton) to match per-row sum or mean.
+
+        Args:
+            inputs: dict of tensors for the architecture (no 'noise' key needed).
+            target_sum: [B] desired sums; or
+            target_mean: [B] desired means (we multiply by D).
+            iters: number of correction steps.
+            tol: stop if absolute sum error < tol.
+            tau: small damping in denominator.
+            nonneg: softplus the outputs before summing/rounding.
+            return_float: if True, return the smooth outputs; else integer-rounded.
+
+        Returns:
+            y: [B, D] tensor whose row sums == target_sum (integers by default).
+        """
+        device = next(self.architecture.parameters()).device
+        B = list(inputs.values())[0].shape[0]
+        # initial noise
+        eps = torch.randn(B, self.noise_dim, device=device).requires_grad_(True)
+
+        # we'll compute per-sample corrections; use small loop for clarity
+        for _ in range(iters):
+            x = self._gen_with_noise(inputs, eps, nonneg=nonneg)      # [B, D]
+            Ddim = x.shape[-1]
+            if target_sum is None:
+                if target_mean is None:
+                    raise ValueError("Provide target_sum or target_mean.")
+                tgt = target_mean.to(x).flatten() * Ddim
+            else:
+                tgt = target_sum.to(x).flatten()
+            g = (x.sum(dim=1) - tgt)                                  # [B]
+            if torch.all(g.abs() <= tol):
+                break
+            # compute v_b = ∇_{eps_b} g_b for each b
+            v_list = []
+            eps_grad = torch.zeros_like(eps)
+            for b in range(B):
+                if eps.grad is not None:
+                    eps.grad.zero_()
+                gb = g[b]
+                gb.backward(retain_graph=True)
+                v_b = eps.grad[b].clone()                              # [noise_dim]
+                v_list.append(v_b)
+                eps.grad.zero_()
+            v = torch.stack(v_list, dim=0)                             # [B, noise_dim]
+            denom = (v.pow(2).sum(dim=1) + tau).unsqueeze(1)           # [B, 1]
+            step = (g / denom.squeeze(1)).unsqueeze(1) * v             # [B, noise_dim]
+            eps = (eps - step).detach().requires_grad_(True)
+
+        x = self._gen_with_noise(inputs, eps, nonneg=nonneg)           # [B, D]
+        # exact integerization with preserved sums
+        if return_float:
+            return x
+        y = self._largest_remainder_round(x, tgt)
+        return y
+
+    @torch.no_grad()
+    def conditional_sparse_sample(
+        self,
+        inputs: dict,
+        target_sum: torch.Tensor = None,
+        target_mean: torch.Tensor = None,
+        max_steps: int = 3,
+        cap: float = None,
+        tol: float = 1e-6,
+        nonneg: bool = True,
+        return_float: bool = False,
+    ):
+        """
+        Sparse ℓ1-style latent correction: greedy one-coordinate updates per sample.
+
+        Args:
+            inputs: dict of tensors for the architecture (no 'noise' key needed).
+            target_sum / target_mean: same semantics as above.
+            max_steps: greedy relinearizations (often 1–3 is enough).
+            cap: optional max absolute change per coordinate in noise (safety).
+            tol: stop if absolute sum error < tol.
+            nonneg: apply softplus before summing/rounding.
+            return_float: return smooth outputs if True.
+
+        Returns:
+            y: [B, D] tensor (integers by default) with exact target sums.
+        """
+        device = next(self.architecture.parameters()).device
+        B = list(inputs.values())[0].shape[0]
+        eps = torch.randn(B, self.noise_dim, device=device).requires_grad_(True)
+
+        for _ in range(max_steps):
+            x = self._gen_with_noise(inputs, eps, nonneg=nonneg)      # [B, D]
+            Ddim = x.shape[-1]
+            if target_sum is None:
+                if target_mean is None:
+                    raise ValueError("Provide target_sum or target_mean.")
+                tgt = target_mean.to(x).flatten() * Ddim
+            else:
+                tgt = target_sum.to(x).flatten()
+            g = (x.sum(dim=1) - tgt)                                  # [B]
+            if torch.all(g.abs() <= tol):
+                break
+            # coordinate-wise update
+            for b in range(B):
+                # backprop scalar g_b
+                if eps.grad is not None:
+                    eps.grad.zero_()
+                gb = g[b]
+                gb.backward(retain_graph=True)
+                v = eps.grad[b]                                        # [noise_dim]
+                k = torch.argmax(v.abs()).item()
+                vk = v[k].detach()
+                if vk.abs() < 1e-12:
+                    continue
+                step = (-gb.detach() / (vk + 1e-12))
+                if cap is not None:
+                    step = torch.clamp(step, min=-abs(cap), max=abs(cap))
+                with torch.no_grad():
+                    eps[b, k] += step
+                eps.grad.zero_()
+            eps = eps.detach().requires_grad_(True)
+
+        x = self._gen_with_noise(inputs, eps, nonneg=nonneg)
+        if return_float:
+            return x
+        y = self._largest_remainder_round(x, tgt)
+        return y

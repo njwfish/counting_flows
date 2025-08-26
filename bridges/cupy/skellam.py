@@ -85,16 +85,7 @@ class SkellamBridge:
             # assert cp.all((N_t - diff_t) % 2 == 0), "N_t - diff_t should be even"
 
             x_t, M_t, t, x_0 = dlpack_backend(x_t, M_t, t, x_0, backend=self.backend, dtype="float32")
-            out_dict = {
-                "inputs": {
-                    "x_t": x_t,
-                    "t": t,
-                },
-                "output": x_0 - x_t if self.delta else x_0
-            }
-            if not self.slack_sampler.markov:
-                out_dict["inputs"]["M_t"] = M_t
-            return out_dict
+            return t, x_t, x_0 - x_t if self.delta else x_0
     
     def sampler(
         self,

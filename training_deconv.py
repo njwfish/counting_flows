@@ -94,20 +94,19 @@ class FlowTrainer:
         x_0 = batch['x_0'].to(self.device)  # Target counts
         x_1 = batch['x_1'].to(self.device)  # Source counts  
         z = batch.get('z', None)  # Conditioning (optional)
-        if z is not None:
-            z = z.to(self.device)
         
         # Apply bridge to get diffusion samples
-        bridge_output = bridge(x_0, x_1)
+        t, x_t, target = bridge(x_0, x_1)
         
-        # Extract inputs and outputs from bridge
-        inputs = bridge_output['inputs']
+        inputs = {
+            "t": t,
+            "x_t": x_t,
+        }
         target = batch['X_0'] - x_0.sum(dim=1) if bridge.delta else batch['X_0']
+
         
-        # Add conditioning to inputs if present
         if z is not None:
-            inputs = inputs.copy()  # Don't modify original
-            inputs['z'] = z
+            inputs['z'] = z.to(self.device)
         
         # Training step
         self.optimizer.zero_grad()
@@ -117,7 +116,7 @@ class FlowTrainer:
         
         return loss.item()
     
-    def train_epoch(self, model: torch.nn.Module, bridge: Any, dataloader: DataLoader, dataset: Any) -> float:
+    def train_epoch(self, epoch: int, model: torch.nn.Module, bridge: Any, dataloader: DataLoader, dataset: Any) -> float:
         """Train for one epoch"""
         epoch_losses = []
 
@@ -130,12 +129,14 @@ class FlowTrainer:
             if z is not None:
                 z = z.to(self.device).reshape(-1, z.shape[-1])
 
+            batch['X_0'] = batch['X_0'].to(self.device)
+            context = {'z': z, 'target_sum': batch['X_0']}
             batch['x_0'] = bridge.sampler(
-                x_1, {'z': z}, model
+                x_1, context, model
             )[0]
             batch['x_1'] = x_1
             batch['z'] = z
-            batch['X_0'] = batch['X_0'].to(self.device)
+
             batches.append(batch)
 
         # m step
@@ -183,7 +184,7 @@ class FlowTrainer:
         
         for epoch in range(self.start_epoch, self.num_epochs):
             model.train()
-            epoch_loss = self.train_epoch(model, bridge, dataloader, dataset)
+            epoch_loss = self.train_epoch(epoch, model, bridge, dataloader, dataset)
             
             # Print progress
             if (epoch + 1) % self.print_every == 0:

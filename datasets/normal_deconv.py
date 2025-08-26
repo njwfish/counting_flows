@@ -1,78 +1,163 @@
 import torch
 from torch.utils.data import Dataset
-from typing import Tuple
+from torch.distributions import Dirichlet
+from typing import Tuple, Dict, Any
+import numpy as np
+from .gaussian_mixture import GaussianMixtureDataset, LowRankGaussianMixtureDataset
 
 class DeconvolutionNormalDataset(Dataset):
     """
-    Each item i:
-      X_i: [G, D] unit-level features (here D=4)
-      Y_i: [C] group totals (here C=2), obtained by summing unit counts
-    Generation:
-      For each unit j and channel k:
-        mean_ijk ~ Uniform, var_ijk ~ Uniform
-        group bias b_{i,k} ~ Normal(0, sigma_b)
-        y_{ijk} ~ Normal(mean_ijk + b_{i,k}, var_ijk)  (then clamped/rounded to >= 0)
-      Y_{i,k} = sum_j y_{ijk}
-      X_{ij} = [mean_{ij1}^0.8, var_{ij1}^0.7, mean_{ij2}^0.3, var_{ij2}^0.1]
+    Deconvolution dataset that wraps LowRankGaussianMixtureDataset.
+    
+    This dataset:
+    1. Uses LowRankGaussianMixtureDataset as the underlying data source
+    2. Provides one-hot context vectors indicating mixture component
+    3. Uses Dirichlet sampling to determine component mixing in groups
+    4. Samples actual group members from the appropriate mixture components
+    
+    Each item returns:
+      x_0: Group of source samples from Gaussian mixture [group_size, data_dim]
+      x_1: Group of target samples from Gaussian mixture [group_size, data_dim] 
+      z: One-hot matrix indicating component for each group member [group_size, k]
+      X_0: Sum of group members [data_dim]
+      
+    The key innovation is that x_0/X_0 contains actual samples from the dataset, with the number
+    of samples from each mixture component determined by Dirichlet-sampled weights.
     """
     def __init__(
         self,
-        size: int,
+        base_size: int,
         data_dim: int,
         min_value: int,
         value_range: int,
-        context_dim: int,
+        context_dim: int,  # This should equal k (number of mixture components)
         group_size: int = 10,
-        mean_range=(5.0, 40.0),
-        var_range=(2.0, 30.0),
-        sigma_bias: float = 3.0,
-        seed: int = 0
+        latent_dim: int = None,  # For low-rank variant
+        k: int = 5,  # Number of mixture components
+        dirichlet_concentration: float = 1.0,  # Concentration parameter for Dirichlet
+        seed: int = 42,
+        **kwargs  # Additional args passed to LowRankGaussianMixtureDataset
     ):
         super().__init__()
-        g = torch.Generator().manual_seed(seed)
-        n_groups = size // group_size
-        G = group_size
+        self.size = base_size // group_size
+        self.base_size = base_size
         self.data_dim = data_dim
-        self.size = size
         self.min_value = min_value
         self.value_range = value_range
         self.group_size = group_size
-
-        means = torch.empty(n_groups, G, data_dim).uniform_(mean_range[0], mean_range[1], generator=g)
-        vars_  = torch.empty(n_groups, G, data_dim).uniform_(var_range[0], var_range[1], generator=g)
-        bias   = torch.normal(mean=0.0, std=sigma_bias, size=(n_groups, data_dim), generator=g)  # group-shared bias
-
-        # unit counts then aggregate
-        x_0 = torch.normal(mean=means + bias[:, None, :], std=vars_.sqrt(), generator=g)
-        x_0 = torch.abs(x_0).round().clamp(min=min_value, max=min_value + value_range)                 # [B, G, data_dim]
-        X_0 = x_0.sum(dim=1)                                    # [B, data_dim]
-
-
-        x_1 = torch.normal(mean=torch.zeros_like(means) + (mean_range[0] + mean_range[1]) / 2, std=torch.sqrt(torch.zeros_like(vars_) + (var_range[1] - var_range[0]) / 2), generator=g)
-        x_1 = torch.abs(x_1).round().clamp(min=min_value, max=min_value + value_range)                 # [B, G, data_dim]
-
-        z = torch.stack(
-            [
-                means[..., i].pow(torch.rand(size=(1,), generator=g).item()) for i in range(data_dim)
-            ] + 
-            [
-                vars_[..., i].pow(torch.rand(size=(1,), generator=g).item()) for i in range(data_dim)
-            ],
-            dim=-1,
-        )                                                   # [B, G, 4]
-
-        self.z = z.float()
-        self.x_1 = x_1.float()
-        self.x_0 = x_0.float()
-        self.X_0 = X_0.float()
+        self.k = k
+        self.dirichlet_concentration = dirichlet_concentration
+        
+        # Use low-rank variant if latent_dim is specified, otherwise use regular variant
+        if latent_dim is not None:
+            self.mixture_dataset = LowRankGaussianMixtureDataset(
+                size=base_size,
+                data_dim=data_dim,
+                latent_dim=latent_dim,
+                value_range=value_range,
+                min_value=min_value,
+                k=k,
+                seed=seed,
+                **kwargs
+            )
+        else:
+            self.mixture_dataset = GaussianMixtureDataset(
+                size=base_size,
+                data_dim=data_dim,
+                value_range=value_range,
+                min_value=min_value,
+                k=k,
+                seed=seed,
+                **kwargs
+            )
+        
+        # Create component index lists and pre-compute all groups
+        self._create_component_indices()
+        self._pre_compute_all_groups(seed)
+        
+    def _create_component_indices(self):
+        """Create lists of indices for each mixture component"""
+        self.component_indices = [[] for _ in range(self.k)]
+        
+        # Group indices by their component assignment
+        for idx in range(self.size):
+            component = self.mixture_dataset.x0_components[idx].item()
+            self.component_indices[component].append(idx)
+            
+    def _pre_compute_all_groups(self, seed: int):
+        """Pre-compute all groups using Dirichlet weights"""
+        # Use torch's random state for consistent seeding
+        with torch.random.fork_rng():
+            torch.manual_seed(seed)  # Different seed to avoid conflicts
+            
+            # Sample Dirichlet weights for component allocation
+            # Shape: [size, k] - each row sums to 1, represents component proportions
+            dirichlet_dist = Dirichlet(self.dirichlet_concentration * self.mixture_dataset.weights_source * self.k)
+            component_weights = dirichlet_dist.sample((self.size,))
+            
+            # Pre-allocate storage for all groups and their component info
+            self.groups = torch.zeros(self.size, self.group_size, self.data_dim, dtype=torch.float32)
+            self.group_component_info = torch.zeros(self.size, self.group_size, dtype=torch.int64)
+            self.group_one_hot = torch.zeros(self.size, self.group_size, self.k, dtype=torch.float32)
+            
+            # Create each group
+            for group_idx in range(self.size):
+                # Convert weights to actual counts for this group
+                counts = torch.multinomial(
+                    component_weights[group_idx], 
+                    self.group_size, 
+                    replacement=True
+                )
+                # Count how many from each component
+                component_counts = torch.bincount(counts, minlength=self.k)
+                
+                # Sample actual group members from each component
+                group_members = []
+                group_components = []
+                for component_id in range(self.k):
+                    count = component_counts[component_id].item()
+                    if count > 0:
+                        # Sample 'count' members from this component's indices (with replacement)
+                        available_indices = self.component_indices[component_id]
+                        if len(available_indices) > 0:
+                            sampled_indices = torch.randint(
+                                0, len(available_indices), (count,)
+                            )
+                            
+                            # Get their x_0 values and store component info
+                            for sampled_idx in sampled_indices:
+                                member_idx = available_indices[sampled_idx.item()]
+                                member_sample = self.mixture_dataset[member_idx]
+                                group_members.append(member_sample['x_0'])
+                                group_components.append(component_id)
+                
+                # Store the group and component info
+                # Note: with sufficient samples, we should always get exactly group_size members
+                self.groups[group_idx] = torch.stack(group_members)
+                self.group_component_info[group_idx] = torch.tensor(group_components)
+                
+                # Pre-compute one-hot vectors for each group member
+                for member_idx, component_id in enumerate(group_components):
+                    self.group_one_hot[group_idx, member_idx, component_id] = 1.0
 
     def __len__(self): 
-        return self.x_1.shape[0]
+        return self.size
 
-    def __getitem__(self, idx): 
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]: 
+        # Get random target sample (same as before)
+        target_idx = np.random.randint(0, self.size, self.group_size)
+        x_1 = self.mixture_dataset.x1_data[target_idx]  # [group_size, data_dim]
+        
+        # Get pre-computed group as both x_0 and X_0
+        x_0 = self.groups[idx]  # [group_size, data_dim]
+        X_0 = x_0.sum(dim=0)  # [data_dim] - sum of group members
+        
+        # Get pre-computed one-hot vectors for each group member
+        z = self.group_one_hot[idx]  # [group_size, k] - one-hot for each member
+        
         return {
-            'x_1': self.x_1[idx],
-            'x_0': self.x_0[idx],
-            'z': self.z[idx],
-            'X_0': self.X_0[idx]
+            'x_0': x_0.float(),  # [group_size, data_dim]
+            'x_1': x_1.float(),  # [group_size, data_dim] 
+            'z': z.float(),      # [group_size, k] - one-hot for each member
+            'X_0': X_0.float()   # [data_dim] - sum of group members
         }
