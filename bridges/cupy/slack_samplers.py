@@ -7,8 +7,8 @@ class ConstantM:
         self.m = m
         self.markov = markov
 
-    def __call__(self, diff: cp.ndarray):
-        return cp.full(diff.shape, self.m)
+    def __call__(self, diff: cp.ndarray, w: cp.ndarray):
+        return cp.round(cp.full(diff.shape, self.m) * w)
 
 class PoissonM:
     def __init__(self, lam_p: float, lam_m: float, markov: bool = False):
@@ -17,8 +17,8 @@ class PoissonM:
         self.lam_star = 2.0 * cp.sqrt(self.lam_p * self.lam_m)
         self.markov = markov
     
-    def __call__(self, diff: cp.ndarray):
-        return cp.random.poisson(self.lam_star, diff.shape)
+    def __call__(self, diff: cp.ndarray, w: cp.ndarray):
+        return cp.random.poisson(self.lam_star * w, diff.shape)
 
 class BesselM:
     def __init__(self, lam_p: float, lam_m: float, markov: bool = True):
