@@ -5,3 +5,4 @@ cell_type_col: "clusters"
 base_cell_type: "0"
 window_size: 196608
 batch_size: 64
+min_value: 0

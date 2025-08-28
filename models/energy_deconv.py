@@ -222,7 +222,7 @@ class DeconvolutionEnergyScoreLoss(nn.Module):
         replicated_inputs['noise'] = noise
 
         # Get all predictions: [n*m, x_dim] → view [n, m, x_dim]
-        predictions = self.architecture(**replicated_inputs)
+        predictions = self.act_fn(self.architecture(**replicated_inputs))
         predictions = predictions.view(num_groups, group_size, self.m, -1)  # [n, num_groups, m, d]
         predictions = predictions.sum(dim=1)  # [n, m, d]
 

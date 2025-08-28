@@ -35,6 +35,7 @@ class ExprBySeq:
         base_cell_type = '9',
         window_size = 1000,
         batch_size = 100,
+        min_value = 0,
     ):
         self.data_dim = 196608
         self.target_size = 896
