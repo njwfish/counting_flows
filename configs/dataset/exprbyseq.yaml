@@ -1,0 +1,7 @@
+_target_: datasets.exprbyseq.ExprBySeq
+snapfile: "/orcd/data/omarabu/001/gokul/count_sequence/training_data/epicardioids_training_data/snapatac_matched_minus.h5ad"
+fastafile: "/orcd/data/omarabu/001/gokul/count_sequence/training_data/scooby_training_data/genome_human.fa"
+cell_type_col: "clusters"
+base_cell_type: "0"
+window_size: 196608
+batch_size: 64

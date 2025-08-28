@@ -91,6 +91,9 @@ class FlowTrainer:
         # Extract data from batch
         x_0 = batch['x_0'].to(self.device)  # Target counts
         x_1 = batch['x_1'].to(self.device)  # Source counts  
+        if x_0.shape[0] == 1:
+            x_0 = x_0.squeeze(0)
+            x_1 = x_1.squeeze(0)
         z = batch.get('z', None)  # Conditioning (optional)
         
         # Apply bridge to get diffusion samples

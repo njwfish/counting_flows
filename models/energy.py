@@ -59,6 +59,9 @@ class EnergyScoreLoss(nn.Module):
         # Replicate all inputs m times by iterating over the dict
         replicated_inputs = {}
         for key, value in inputs.items():
+            if key == 'z':
+                replicated_inputs[key] = value
+                continue
             replicated_inputs[key] = value.unsqueeze(1).expand(-1, self.m, *[-1] * (value.dim() - 1)).reshape(n * self.m, *value.shape[1:])
 
         # Add noise (energy score specific requirement)  
