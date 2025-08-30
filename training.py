@@ -28,7 +28,8 @@ class FlowTrainer:
         num_workers: int = 0,
         print_every: int = 10,
         save_every: Optional[int] = None,
-        output_dir: Optional[str] = None
+        output_dir: Optional[str] = None,
+        classifier_free_guidance_prob: float = 0.0
     ):
         """
         Args:
@@ -53,7 +54,7 @@ class FlowTrainer:
         self.print_every = print_every
         self.save_every = save_every
         self.output_dir = Path(output_dir) if output_dir else None
-        
+        self.classifier_free_guidance_prob = classifier_free_guidance_prob
         # Training state
         self.losses = []
         self.start_epoch = 0
@@ -89,15 +90,10 @@ class FlowTrainer:
     def training_step(self, model: torch.nn.Module, bridge: Any, batch: Dict[str, torch.Tensor]) -> float:
         """Execute a single training step"""
         # Extract data from batch
-        x_0 = batch['x_0'].to(self.device)  # Target counts
-        x_1 = batch['x_1'].to(self.device)  # Source counts  
-        if x_0.shape[0] == 1:
-            x_0 = x_0.squeeze(0)
-            x_1 = x_1.squeeze(0)
-        z = batch.get('z', None)  # Conditioning (optional)
+        x_0 = batch['x_0'].squeeze(0).to(self.device)  # Target counts
+        x_1 = batch['x_1'].squeeze(0).to(self.device)  # Source counts  
         
-        # Apply bridge to get diffusion samples
-        t, x_t, target = bridge(x_0, x_1)
+        t, x_t, target = bridge(x_0=x_0, x_1=x_1)
         
         # Extract inputs and outputs from bridge
         inputs = {
@@ -105,8 +101,13 @@ class FlowTrainer:
             "x_t": x_t,
         }
         
-        if z is not None:
-            inputs['z'] = z.to(self.device)
+        for key in batch:
+            if key != 'x_0' and key != 'x_1':
+                inputs[key] = batch[key].squeeze(0).to(self.device)
+                if 'key' == 'class_emb' and self.classifier_free_guidance_prob > 0:
+                    # random mask out prob of the class embeddings
+                    mask = torch.rand(inputs[key].shape[0]) < self.classifier_free_guidance_prob
+                    inputs[key][mask] = 0
         
         # Training step
         self.optimizer.zero_grad()
