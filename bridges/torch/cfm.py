@@ -26,24 +26,15 @@ class CFMBridge:
     Flow field: u_t = x_1 - x_0
     """
     
-    def __init__(self, n_steps: int = 100, fm_type: str = "cfm", ot_type: str = "exact", 
-                 sigma: float = 1.0, device: int = 0):
+    def __init__(self, sigma: float = 1.0, device: int = 0, homogeneous_time: bool = False):
         """
         Args:
-            n_steps: Number of time steps for sampling
-            fm_type: Flow matching type ("cfm", "variance_preserving", "schrodinger")
-            ot_type: Optimal transport type ("exact" or "independent")  
             sigma: Noise level for the probability path
             device: Device for computations
         """
-        self.n_steps = n_steps
-        self.fm_type = fm_type
-        self.ot_type = ot_type
         self.sigma = sigma
         self.device = device
-        
-        # Create discrete time points for reverse sampling
-        self.time_points = torch.linspace(0, 1, n_steps + 1)
+        self.homogeneous_time = homogeneous_time
 
     def compute_mu_t(self, x_0, x_1, t):
         """
@@ -88,7 +79,7 @@ class CFMBridge:
         
         # Sample time uniformly
         if t is not None:
-            t = t.expand(batch_size, 1)
+            t = torch.full((batch_size,), t, device=x_0.device)
         else:
             if self.homogeneous_time:
                 t = torch.rand(1, device=x_0.device).expand(batch_size, 1)
@@ -109,6 +100,45 @@ class CFMBridge:
         
         return t.unsqueeze(1), x_t.float(), u_t.float()
 
+    def sample_step(self, t_curr, t_next, x_t, x_0_pred, use_sde=False, **z):
+        if use_sde:
+            return self.sde_sample_step(t_curr, t_next, x_t, x_0_pred, **z)
+        else:
+            return self.ode_sample_step(t_curr, t_next, x_t, x_0_pred, **z)
+
+    def ode_sample_step(self, t_curr, t_next, x_t, v_pred, **z):
+        """Single reverse sampling step using discrete time"""
+        # Take discrete step backwards in time
+        dt = t_curr - t_next  # Positive step size  
+        x_next = x_t - dt * v_pred  # Negative velocity for backward flow
+        
+        # Estimate x_0 prediction for this step
+        x_0_pred = x_t - (1 - t_curr) * v_pred
+        
+        return x_next, x_0_pred
+
+    def sde_sample_step(self, t_curr, t_next, x_t, v_pred, **z):
+        """Single SDE step using Euler-Maruyama"""
+        # Euler-Maruyama step
+        dt = t_curr - t_next  # Positive step size
+        
+        # Drift term: f(x,t) = -v_t(x) for backward flow
+        drift = -v_pred
+        
+        # Diffusion term: g(x,t) = sigma_t(t) - use same as forward process
+        sigma_t = self.compute_sigma_t(t_curr)
+        sigma_t = pad_t_like_x(sigma_t, x_t)
+        noise = torch.randn_like(x_t)
+        diffusion = sigma_t * noise
+        
+        # SDE step: x_next = x_t + f*dt + g*sqrt(dt)*dW
+        x_next = x_t + drift * dt + diffusion * torch.sqrt(dt)
+        
+        # Estimate x_0 prediction for this step
+        x_0_pred = x_t - (1 - t_curr) * v_pred
+        
+        return x_next, x_0_pred
+
     def sampler(
         self,
         x_1: torch.Tensor,
@@ -118,6 +148,7 @@ class CFMBridge:
         return_x_hat: bool = False,
         guidance_x_0: torch.Tensor = None,
         guidance_schedule: torch.Tensor = None,
+        n_steps: int = 10,
         use_sde: bool = False,
         **kwargs
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, ...]]:
@@ -132,6 +163,7 @@ class CFMBridge:
             return_x_hat: Whether to return predicted x_0 at each step
             guidance_x_0: Optional guidance target
             guidance_schedule: Optional guidance schedule
+            n_steps: Number of time steps for sampling
             use_sde: Whether to use SDE (Euler-Maruyama) instead of ODE
             **kwargs: Additional sampling arguments
         
@@ -139,88 +171,39 @@ class CFMBridge:
             x_0: Sampled starting points
             Optional: trajectory, x_hat predictions based on flags
         """
-        if use_sde:
-            return self._sde_sampler(
-                x_1, z, model, return_trajectory, return_x_hat, 
-                guidance_x_0, guidance_schedule, **kwargs
-            )
-        else:
-            return self._ode_sampler(
-                x_1, z, model, return_trajectory, return_x_hat,
-                guidance_x_0, guidance_schedule, **kwargs
-            )
-
-    def _ode_sampler(
-        self,
-        x_1: torch.Tensor,
-        z: Dict[str, Any],
-        model,
-        return_trajectory: bool = False,
-        return_x_hat: bool = False,
-        guidance_x_0: torch.Tensor = None,
-        guidance_schedule: torch.Tensor = None,
-        **kwargs
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, ...]]:
-        """
-        Discrete time reverse sampler for Conditional Flow Matching.
-        
-        Args:
-            x_1: End point samples (batch_size, dim)
-            z: Additional conditioning dict
-            model: Neural network model that predicts velocity field
-            return_trajectory: Whether to return full sampling trajectory
-            return_x_hat: Whether to return predicted x_0 at each step
-            guidance_x_0: Optional guidance target
-            guidance_schedule: Optional guidance schedule
-            **kwargs: Additional sampling arguments
-        
-        Returns:
-            x_0: Sampled starting points
-            Optional: trajectory, x_hat predictions based on flags
-        """
-        b, d = x_1.shape
+        b = x_1.shape[0]
         x_t = x_1.float()
         
         # Move time points to same device as input
-        time_points = self.time_points.to(x_t.device)
+        time_points = torch.linspace(0, 1, n_steps + 1).to(x_t.device)
         
         if guidance_x_0 is not None:
             guidance_x_0 = guidance_x_0.float()
+
+        # Initialize tracking lists
+        traj = [x_t]
+        xhat_traj = []
         
-        def sample_step(k, x_t, **z):
-            """Single reverse sampling step using discrete time"""
-            # Current time point
+        # Reverse sampling loop
+        for k in range(n_steps, 0, -1):
             t_curr = time_points[k]
+            t_next = time_points[k-1]
+            # Current time point
             t = t_curr.expand(b, 1)
             
             # Predict velocity field
             with torch.no_grad():
                 v_pred = model.sample(x_t=x_t, t=t, **z)
                 
-            # Apply guidance if provided
-            if guidance_x_0 is not None and guidance_schedule is not None:
-                # Simple guidance: interpolate velocity towards guidance target
-                guidance_weight = guidance_schedule[k] 
-                x_0_pred = x_t - (1 - t_curr) * v_pred
-                x_0_guided = guidance_weight * guidance_x_0 + (1 - guidance_weight) * x_0_pred
-                v_pred = (x_t - x_0_guided) / (1 - t_curr + 1e-8)
-            
-            # Take discrete step backwards in time
-            dt = time_points[k] - time_points[k-1]  # Positive step size  
-            x_next = x_t - dt * v_pred  # Negative velocity for backward flow
-            
-            # Estimate x_0 prediction for this step
-            x_0_pred = x_t - (1 - t_curr) * v_pred
-            
-            return x_next, x_0_pred
-        
-        # Initialize tracking lists
-        traj = [x_t]
-        xhat_traj = []
-        
-        # Reverse sampling loop
-        for k in range(self.n_steps, 0, -1):
-            x_t, x_0_pred = sample_step(k, x_t, **z)
+                # Apply guidance if provided
+                if guidance_x_0 is not None and guidance_schedule is not None:
+                    # Simple guidance: interpolate velocity towards guidance target
+                    guidance_weight = guidance_schedule[k] 
+                    x_0_pred = x_t - (1 - t_curr) * v_pred
+                    x_0_guided = guidance_weight * guidance_x_0 + (1 - guidance_weight) * x_0_pred
+                    v_pred = (x_t - x_0_guided) / (1 - t_curr + 1e-8)
+
+                x_t, x_0_pred = self.sample_step(t_curr, t_next, x_t, v_pred, **z, use_sde=use_sde)
             
             if return_trajectory:
                 traj.append(x_t)
@@ -235,98 +218,6 @@ class CFMBridge:
             outs.append(torch.stack(xhat_traj))
         
         return tuple(outs) if len(outs) > 1 else x_t
-
-    def _sde_sampler(
-        self,
-        x_1: torch.Tensor,
-        z: Dict[str, Any],
-        model,
-        return_trajectory: bool = False,
-        return_x_hat: bool = False,
-        guidance_x_0: torch.Tensor = None,
-        guidance_schedule: torch.Tensor = None,
-        **kwargs
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, ...]]:
-        """
-        SDE sampler using Euler-Maruyama method.
-        
-        Implements: dx = f(x,t)dt + g(x,t)dW
-        where f(x,t) = -v_t(x) (negative velocity for backward flow)
-        and g(x,t) = sigma_t(t) (uses same noise schedule as forward process)
-        """
-        b, d = x_1.shape
-        x_t = x_1.float()
-        
-        # Move time points to same device as input
-        time_points = self.time_points.to(x_t.device)
-        
-        if guidance_x_0 is not None:
-            guidance_x_0 = guidance_x_0.float()
-        
-        def sde_sample_step(k, x_t, **z):
-            """Single SDE step using Euler-Maruyama"""
-            # Current time point
-            t_curr = time_points[k]
-            t = t_curr.expand(b, 1)
-            
-            # Predict velocity field (drift)
-            with torch.no_grad():
-                v_pred = model.sample(x_t=x_t, t=t, **z)
-                
-            # Apply guidance if provided
-            if guidance_x_0 is not None and guidance_schedule is not None:
-                guidance_weight = guidance_schedule[k] 
-                x_0_pred = x_t - (1 - t_curr) * v_pred
-                x_0_guided = guidance_weight * guidance_x_0 + (1 - guidance_weight) * x_0_pred
-                v_pred = (x_t - x_0_guided) / (1 - t_curr + 1e-8)
-            
-            # Euler-Maruyama step
-            dt = time_points[k] - time_points[k-1]  # Positive step size
-            
-            # Drift term: f(x,t) = -v_t(x) for backward flow
-            drift = -v_pred
-            
-            # Diffusion term: g(x,t) = sigma_t(t) - use same as forward process
-            sigma_t = self.compute_sigma_t(t_curr)
-            sigma_t = pad_t_like_x(sigma_t, x_t)
-            noise = torch.randn_like(x_t)
-            diffusion = sigma_t * noise
-            
-            # SDE step: x_next = x_t + f*dt + g*sqrt(dt)*dW
-            x_next = x_t + drift * dt + diffusion * torch.sqrt(dt)
-            
-            # Estimate x_0 prediction for this step
-            x_0_pred = x_t - (1 - t_curr) * v_pred
-            
-            return x_next, x_0_pred
-        
-        # Initialize tracking lists
-        traj = [x_t]
-        xhat_traj = []
-        
-        # Reverse SDE sampling loop
-        for k in range(self.n_steps, 0, -1):
-            x_t, x_0_pred = sde_sample_step(k, x_t, **z)
-            
-            if return_trajectory:
-                traj.append(x_t)
-            if return_x_hat:
-                xhat_traj.append(x_0_pred)
-        
-        # Prepare outputs
-        outs = [x_t]
-        if return_trajectory:
-            outs.append(torch.stack(traj))
-        if return_x_hat:
-            outs.append(torch.stack(xhat_traj))
-        
-        return tuple(outs) if len(outs) > 1 else x_t
-
-    def __str__(self):
-        return f'CFMBridge(n_steps={self.n_steps}, fm_type={self.fm_type}, ot_type={self.ot_type}, sigma={self.sigma})'
-
-    def __repr__(self):
-        return self.__str__()
 
 
 class SchrodingerBridgeConditionalFlowMatcher(CFMBridge):

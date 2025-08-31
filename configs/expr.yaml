@@ -20,12 +20,10 @@ hydra:
 # Global settings
 device: cuda
 seed: 42
-n_steps: 10
-train_split: 0.8  # 80% train, 20% eval
 
 # Experiment settings
 experiment:
-  name: "counting_flows_experiment"
+  name: "Sequence-to-Counts"
   version: "1.0"
   description: "Count-based flow matching with GPU bridges"
 

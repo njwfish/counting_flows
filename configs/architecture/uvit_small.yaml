@@ -1,0 +1,7 @@
+_target_: architecture.uvit.UViT
+img_size: 28
+patch_size: 4
+in_chans: 1
+embed_dim: 64
+depth: 6
+num_heads: 4

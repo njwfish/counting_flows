@@ -15,7 +15,6 @@ class SkellamBridge:
 
     def __init__(
         self,
-        n_steps: int,
         slack_sampler: Callable,
         delta: bool = False,
         schedule_type: str = "linear",
@@ -25,7 +24,6 @@ class SkellamBridge:
         **schedule_kwargs,
     ):
         self.device           = device
-        self.n_steps          = n_steps
         self.slack_sampler    = slack_sampler
         self.schedule_type    = schedule_type
         self.delta            = delta
@@ -33,36 +31,35 @@ class SkellamBridge:
         # there is no need to sample homogeneous time points in this bridge
         self.homogeneous_time = homogeneous_time
         self.backend          = backend
-        with cp.cuda.Device(self.device):
+        self.weight_schedule  = make_weight_schedule(
+            schedule_type, **schedule_kwargs
+        )
 
-            self.time_points      = cp.linspace(0, 1, n_steps + 1)
-            self.weight_schedule  = make_weight_schedule(
-                n_steps, schedule_type, **schedule_kwargs
-            )
-
-    def __call__(self, x_0, x_1, t_target=None):
+    def __call__(self, x_0, x_1, t=None):
         with cp.cuda.Device(self.device):
             x_0, x_1 = dlpack_backend(x_0, x_1, backend='cupy', dtype="int32")
 
-            b, d = x_0.shape
+            b = x_0.shape[0]
 
             diff = (x_1 - x_0)
-            w_1 = self.weights[-1]
+            w_1 = self.weight_schedule(1)
             M = self.slack_sampler(cp.abs(diff), w_1)
             N_1 = cp.abs(diff) + 2 * M
             B_1 = (N_1 + diff) // 2
             # assert cp.all((N_1 + diff) % 2 == 0), "N_1 + diff should be even"
 
 
-            if t is None:
+            if t is not None:
+                t = cp.full((b, 1), t, dtype=cp.float32)
+            else:
                 if self.homogeneous_time:
                     t = cp.random.rand().expand(b, 1)
                 else:
-                    t = cp.random.rand(b)
+                    t = cp.random.rand(b, 1)
                 
             w_t   = self.weight_schedule(t)
             
-            N_t = cp.random.binomial(N_1, cp.expand_dims(w_t, -1), dtype=cp.int32)
+            N_t = cp.random.binomial(N_1, w_t, dtype=cp.int32)
             
             # need to gaurd against zero nsample
             non_zero = N_t > 0
@@ -82,6 +79,42 @@ class SkellamBridge:
 
             x_t, M_t, t, x_0 = dlpack_backend(x_t, M_t, t, x_0, backend=self.backend, dtype="float32")
             return t, x_t, x_0 - x_t if self.delta else x_0
+
+
+    def sample_step(self, t_curr, t_next, x_t, model_out, **z):
+        x0_hat_t = cp.from_dlpack(model_out) + x_t if self.delta else cp.from_dlpack(model_out)
+        
+        x0_hat_t = x0_hat_t.round().astype(cp.int32)
+        diff = x_t - x0_hat_t
+
+        M_t = self.slack_sampler(cp.abs(diff), self.weight_schedule(t_curr))
+
+        N_t = cp.abs(diff) + 2 * M_t
+        B_t = (N_t + diff) // 2
+        # post correction should be even
+        # assert cp.all((N_t + diff) % 2 == 0), "N_t + diff should be even"
+
+        ρ = (self.weight_schedule(t_next) / self.weight_schedule(t_curr))
+        print(ρ, t_next, t_curr)
+        non_zero = N_t > 0
+        N_s = cp.zeros_like(N_t)
+        N_s[non_zero] = cp.random.binomial(N_t[non_zero], ρ)
+
+        non_zero = N_s > 0
+        B_s = cp.zeros_like(B_t)
+        B_s[non_zero] = cp.random.hypergeometric(
+            ngood   = B_t[non_zero],
+            nbad    = N_t[non_zero] - B_t[non_zero],
+            nsample = N_s[non_zero]
+        )
+
+        x_s = x_t - 2 * (B_t - B_s) + (N_t - N_s)
+        diff_s = cp.abs(x_s - x0_hat_t)
+        # since we corrected above this should be fine
+        M_s = (N_s - diff_s) // 2 
+        # assert cp.all((N_s - diff_s) % 2 == 0), "N_s - diff_s should be even"
+
+        return x_s, x0_hat_t
     
     def sampler(
         self,
@@ -90,72 +123,36 @@ class SkellamBridge:
         model,
         return_trajectory: bool = False,
         return_x_hat:      bool = False,
-        return_M:          bool = False,
         guidance_x_0:      cp.ndarray = None,
         guidance_schedule: cp.ndarray = None,
+        n_steps: int = 10,
     ):
         with cp.cuda.Device(self.device):
-            b, d    = x_1.shape
+            b = x_1.shape[0]
             x_1 = x_t = cp.from_dlpack(x_1).round().astype(cp.int32)
 
             if guidance_x_0 is not None:
                 guidance_x_0 = cp.from_dlpack(guidance_x_0).round().astype(cp.int32)
 
-            time_points = cp.linspace(0, 1, self.n_steps + 1)
-
-            def sample_step(k, x_t, M_t=None, **z):
+            time_points = cp.linspace(0, 1, n_steps + 1)
+            
+            traj, xhat_traj = [x_t], []
+            for k in range(n_steps, 0, -1):
+                t_curr = time_points[k]
+                t_next = time_points[k-1]
                 t = cp.broadcast_to(time_points[k], (b, 1))
                 x_t_dl, t_dl = dlpack_backend(x_t, t, backend=self.backend, dtype="float32")
                 model_out = model.sample(x_t=x_t_dl, t=t_dl, **z)
 
-                x0_hat_t = cp.from_dlpack(model_out) + x_t if self.delta else cp.from_dlpack(model_out)
-
                 if guidance_x_0 is not None:
                     x0_hat_t =  guidance_schedule[k] * guidance_x_0 + (1 - guidance_schedule[k]) * x0_hat_t
 
-                x0_hat_t = x0_hat_t.round().astype(cp.int32)
-                diff = x_t - x0_hat_t
-
-                M_t = self.slack_sampler(cp.abs(diff), self.weight_schedule(t))
-
-                N_t = cp.abs(diff) + 2 * M_t
-                B_t = (N_t + diff) // 2
-                # post correction should be even
-                # assert cp.all((N_t + diff) % 2 == 0), "N_t + diff should be even"
-
-                ρ = (self.weight_schedule(time_points[k-1]) / self.weight_schedule(t))
-                non_zero = N_t > 0
-                N_s = cp.zeros_like(N_t)
-                N_s[non_zero] = cp.random.binomial(N_t[non_zero], ρ)
-
-                non_zero = N_s > 0
-                B_s = cp.zeros_like(B_t)
-                B_s[non_zero] = cp.random.hypergeometric(
-                    ngood   = B_t[non_zero],
-                    nbad    = N_t[non_zero] - B_t[non_zero],
-                    nsample = N_s[non_zero]
-                )
-
-                x_s = x_t - 2 * (B_t - B_s) + (N_t - N_s)
-                diff_s = cp.abs(x_s - x0_hat_t)
-                # since we corrected above this should be fine
-                M_s = (N_s - diff_s) // 2 
-                # assert cp.all((N_s - diff_s) % 2 == 0), "N_s - diff_s should be even"
-
-                return x_s, M_s, x0_hat_t
-            
-            x_t, M_t, x0_hat_t = sample_step(self.n_steps, x_t, None, **z)
-
-            traj, xhat_traj, M_traj = [x_t], [x0_hat_t], [M_t]
-            for k in range(self.n_steps - 1, 0, -1):
-                x_t, M_t, x0_hat_t = sample_step(k, x_t, M_t, **z)
+                x_t, x0_hat_t = self.sample_step(t_curr, t_next, x_t, model_out, **z)
 
                 if return_trajectory: traj.append(x_t)
                 if return_x_hat:     xhat_traj.append(x0_hat_t)
-                if return_M:         M_traj.append(M_t)
 
             outs = [x_t]
             if return_trajectory: outs.append(cp.stack(traj))
             if return_x_hat:      outs.append(cp.stack(xhat_traj))
-            if return_M:          outs.append(cp.stack(M_traj))
             return dlpack_backend(*outs, backend=self.backend, dtype="float32") if len(outs) > 1 else dlpack_backend(x_t, backend=self.backend, dtype="float32") 

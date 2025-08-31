@@ -11,7 +11,7 @@ from typing import Dict, Any, Optional, Tuple
 import logging
 
 
-class FlowTrainer:
+class Trainer:
     """
     Clean, modular trainer for flow-based models.
     Works with any bridge (CFM, counting flows, etc.) and loss function (energy score, MSE, etc.).
@@ -29,7 +29,8 @@ class FlowTrainer:
         print_every: int = 10,
         save_every: Optional[int] = None,
         output_dir: Optional[str] = None,
-        classifier_free_guidance_prob: float = 0.0
+        classifier_free_guidance_prob: float = 0.0,
+        save_intermediate_checkpoints: bool = False
     ):
         """
         Args:
@@ -59,6 +60,7 @@ class FlowTrainer:
         self.losses = []
         self.start_epoch = 0
         self.optimizer = None
+        self.save_intermediate_checkpoints = save_intermediate_checkpoints
     
     def _create_dataloader(self, dataset):
         """Create DataLoader from dataset"""
@@ -85,6 +87,9 @@ class FlowTrainer:
         
         checkpoint_path = self.output_dir / "model.pt"
         torch.save(checkpoint, checkpoint_path)
+        if self.save_intermediate_checkpoints:
+            checkpoint_path = self.output_dir / f"model_epoch={current_epoch}.pt"
+            torch.save(checkpoint, checkpoint_path)
         logging.info(f"Checkpoint saved: {checkpoint_path}")
     
     def training_step(self, model: torch.nn.Module, bridge: Any, batch: Dict[str, torch.Tensor]) -> float:

@@ -13,12 +13,13 @@ import numpy as np
 import pickle
 import cupy as cp
 from torch.utils.data import random_split
+from typing import Optional
 
 # Capture original working directory before Hydra changes it
 ORIGINAL_CWD = Path.cwd().resolve()
 
-from visualization import plot_loss_curve, plot_bridge_marginals, plot_model_samples, save_plots
-from eval import generate_evaluation_data, compute_evaluation_metrics, log_evaluation_summary
+from visualization import plot_loss_curve, plot_model_samples, save_plots
+from sample import run_sampling_evaluation
 
 
 def setup_environment(cfg: DictConfig) -> str:
@@ -46,29 +47,13 @@ def setup_environment(cfg: DictConfig) -> str:
     return device
 
 
-def get_checkpoint_info(cfg: DictConfig) -> tuple:
+def get_checkpoint_info(cfg: DictConfig, num_epochs: Optional[int] = None) -> tuple:
     """Get checkpoint path and load if exists"""
     from pathlib import Path
-    import hashlib
-    import json
+    from utils import get_model_hash
     
-    # Create config hash (excluding training params)
-    config_copy = OmegaConf.to_container(cfg, resolve=True)
-    training_params = [
-        'num_epochs', 'learning_rate', 'weight_decay', 'batch_size', 
-        'print_every', 'save_every', 'checkpoint_dir', 'create_plots',
-        'save_model', 'grad_clip_enabled', 'grad_clip_max_norm',
-        'shuffle', 'num_workers'
-    ]
-    
-    if 'trainer' in config_copy:
-        for param in training_params:
-            config_copy['trainer'].pop(param, None)
-    for param in training_params:
-        config_copy.pop(param, None)
-    
-    config_str = json.dumps(config_copy, sort_keys=True)
-    config_hash = hashlib.md5(config_str.encode()).hexdigest()[:12]
+    # Get model hash excluding training and sampling params
+    config_hash = get_model_hash(cfg)
     
     # Setup output directory
     output_dir = ORIGINAL_CWD / "outputs" / config_hash
@@ -79,8 +64,15 @@ def get_checkpoint_info(cfg: DictConfig) -> tuple:
     if not config_path.exists():
         with open(config_path, 'w') as f:
             f.write(OmegaConf.to_yaml(cfg))
+
+    if num_epochs is not None:
+        epoch_checkpoint_path =  output_dir / f"model_epoch={num_epochs}.pt"
+        if epoch_checkpoint_path.exists():
+            checkpoint = torch.load(epoch_checkpoint_path, map_location='cpu')
+            logging.info(f"Found epoch checkpoint: {epoch_checkpoint_path}")
+            return output_dir, checkpoint
     
-    # Check for checkpoint
+    # Check for any checkpoint
     checkpoint_path = output_dir / "model.pt"
     checkpoint = None
     if checkpoint_path.exists():
@@ -96,6 +88,8 @@ def is_training_complete(checkpoint: dict, total_epochs: int) -> bool:
         return False
     
     current_epoch = checkpoint.get('current_epoch', 0)
+    if current_epoch > total_epochs:
+        logging.warning(f"Current epoch {current_epoch} is greater than total epochs {total_epochs}")
     return current_epoch >= total_epochs
 
 
@@ -123,7 +117,9 @@ def main(cfg: DictConfig) -> None:
     device = setup_environment(cfg)
     
     # Get checkpoint info
-    output_dir, checkpoint = get_checkpoint_info(cfg)
+    output_dir, checkpoint = get_checkpoint_info(cfg, num_epochs=cfg.training.num_epochs)
+
+    logging.info(f"Output directory: {output_dir}")
     
     # Check if training is complete
     training_complete = is_training_complete(checkpoint, cfg.training.num_epochs)
@@ -187,40 +183,29 @@ def main(cfg: DictConfig) -> None:
     if cfg.get('create_plots', True):
         logging.info("Generating evaluation and plots...")
         
-        # Generate evaluation data using eval split
-        eval_data = generate_evaluation_data(trained_model, bridge, eval_dataset, n_samples=min(10_000, len(eval_dataset)))
-        metrics = compute_evaluation_metrics(eval_data)
-        log_evaluation_summary(eval_data, metrics)
-
-        # save eval data
-        eval_data_path = output_dir / "eval_data.pkl"
-        with open(eval_data_path, 'wb') as f:
-            pickle.dump(eval_data, f)
+        # Get n_steps from config or use default
+        n_steps = cfg.get('n_steps', 10)
+        n_samples = min(cfg.get('n_samples', 10000), len(eval_dataset))
         
-        # Create plots
+        # Create training loss plot
         plots = {}
         plots['training_loss'] = plot_loss_curve(losses, title="Training Loss")
-        plots['bridge_marginals'] = plot_bridge_marginals(
-            x0_batch=eval_data['x0_target'][:100], 
-            x1_batch=eval_data['x1_batch'][:100], 
-            bridge=bridge, 
-            title="Bridge Marginals"
+        
+        # Save training plot immediately
+        training_plots_dir = output_dir / "training_plots"
+        save_plots(plots, str(training_plots_dir))
+        logging.info(f"Training plots saved to: {training_plots_dir}")
+        
+        # Run sampling evaluation
+        eval_result = run_sampling_evaluation(
+            trained_model=trained_model,
+            bridge=bridge,
+            dataset=eval_dataset,
+            output_dir=output_dir,
+            n_steps=n_steps,
+            n_samples=n_samples,
+            n_epochs=cfg.training.num_epochs
         )
-        
-        sample_figs = plot_model_samples(eval_data, title="Generated Samples")
-        plots['model_trajectories'] = sample_figs['trajectories']
-        plots['model_distributions'] = sample_figs['distributions']
-        
-        # Add 2D plots if available
-        if '2d_trajectories' in sample_figs:
-            plots['model_2d_trajectories'] = sample_figs['2d_trajectories']
-        if '2d_time_evolution' in sample_figs:
-            plots['model_2d_time_evolution'] = sample_figs['2d_time_evolution']
-        
-        # Save plots
-        plots_dir = output_dir / "plots"
-        save_plots(plots, str(plots_dir))
-        logging.info(f"Plots saved to: {plots_dir}")
     
     # Final summary
     final_loss = losses[-1] if losses else float('inf')

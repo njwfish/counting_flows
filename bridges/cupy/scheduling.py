@@ -20,7 +20,5 @@ def make_weight_schedule(K, schedule_type="linear", **kwargs):
     Returns:
         weights: array of shape (K+1,) with weights from 0 to 1
     """
-    # Create base time points
-    w = cp.linspace(0, 1, num=K+1)
     
-    return weight_functions[schedule_type](w, **kwargs)
+    return lambda t: weight_functions[schedule_type](t, **kwargs)

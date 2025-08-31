@@ -18,25 +18,21 @@ class DiscreteFlowBridge:
     Each dimension independently chooses x_1 with probability t.
     """
     
-    def __init__(self, n_steps: int = 100, device: int = 0):
+    def __init__(self, device: int = 0, homogeneous_time: bool = False):
         """
         Args:
-            n_steps: Number of time steps for sampling
             device: Device for computations
         """
-        self.n_steps = n_steps
         self.device = device
-        
-        # Create discrete time points for reverse sampling
-        self.time_points = torch.linspace(0, 1, n_steps + 1)
+        self.homogeneous_time = homogeneous_time
     
     def __call__(self, x_0, x_1, t=None):
         """
         Apply zero masking bridge.
         
         Args:
-            x_0: Source noise data
-            x_1: Target data
+            x_0: Target data 
+            x_1: Source noise data
             t: Optional target time (if None, sample random time)
             
         Returns:
@@ -46,7 +42,8 @@ class DiscreteFlowBridge:
         
         # Sample time
         if t is not None:
-            t = t.expand(batch_size, 1)
+            # every other bridge is 1 -> 0 but here we do 0 -> 1, so we need to flip the time
+            t = 1 - torch.full((batch_size,), t, device=x_0.device)
         else:
             if self.homogeneous_time:
                 t = torch.rand(1, device=x_0.device).expand(batch_size, 1)
@@ -56,9 +53,39 @@ class DiscreteFlowBridge:
         # Apply zero masking: x_t = where(rand < t, x_1, x_0)
         # Each dimension independently chooses x_1 with probability t
         mask = torch.rand_like(x_0.float()) < t[:, None]
+        # this is flipped so its a bit weird: we flow from 1 to 0 but in time its 0 to 1
         x_t = torch.where(mask, x_0, x_1)
+
+        # again we flip the time for consistency with the other bridges, so all that will use 0 -> 1 is the actual sampling process
+        return 1 - t.unsqueeze(1), x_t.float(), x_0.float()
+
+    def sample_step(self, t_curr, t_next, x_t, logits, **z):
+        """Single forward sampling step using discrete time"""
+        t_curr = 1 - t_curr
+        t_next = 1 - t_next
+        # Sample from predicted distribution
+        p1 = torch.softmax(logits, dim=-1)
         
-        return t.unsqueeze(1), x_t.float(), x_0.float()
+        # For discrete flow, the x_0 prediction is just sampling from p1
+        x_0_pred = torch.distributions.Categorical(probs=p1).sample()
+        
+        one_hot_x_t = torch.nn.functional.one_hot(x_t, p1.shape[-1]).float()
+        
+        # Flow field: (p1 - one_hot_x_t) / (1.0 - t)
+        if t_curr < 1.0 - 1e-6:  # Avoid division by zero at t=1
+            u = (p1 - one_hot_x_t) / (1.0 - t_curr)
+            
+            # Take discrete step forward in time
+            dt = (t_curr - t_next)
+            new_probs = one_hot_x_t + dt * u
+            new_probs = torch.clamp(new_probs, min=0.0)
+            new_probs = new_probs / (new_probs.sum(dim=-1, keepdim=True) + 1e-8)
+            x_next = torch.distributions.Categorical(probs=new_probs).sample()
+        else:
+            # At final step, just sample from model prediction
+            x_next = x_0_pred
+        
+        return x_next, x_0_pred
     
     def sampler(
         self,
@@ -67,6 +94,7 @@ class DiscreteFlowBridge:
         model,
         return_trajectory: bool = False,
         return_x_hat: bool = False,
+        n_steps: int = 10,
         **kwargs
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, ...]]:
         """
@@ -84,53 +112,24 @@ class DiscreteFlowBridge:
             x_0: Sampled starting points
             Optional: trajectory, x_hat predictions based on flags
         """
-        b, d = x_1.shape
+        b = x_1.shape[0]
         x_t = x_1.long()
         
         # Move time points to same device as input
-        time_points = self.time_points.to(x_t.device)
-        
-        def sample_step(k, x_t, **z):
-            """Single forward sampling step using discrete time"""
-            # Current time point (note: DFM goes forward from 0 to 1)
-            t_curr = time_points[k-1]  # k-1 because we're going forward
-            t = t_curr.expand(b, 1)
-            
-            # Get model predictions (logits)
-            with torch.no_grad():
-                logits = model.forward({"x_t": x_t.float(), "t": t, **z})
-            
-            # Sample from predicted distribution
-            p1 = torch.softmax(logits, dim=-1)
-            
-            # For discrete flow, the x_0 prediction is just sampling from p1
-            x_0_pred = torch.distributions.Categorical(probs=p1).sample()
-            
-            one_hot_x_t = torch.nn.functional.one_hot(x_t, p1.shape[-1]).float()
-            
-            # Flow field: (p1 - one_hot_x_t) / (1.0 - t)
-            if t_curr < 1.0 - 1e-6:  # Avoid division by zero at t=1
-                u = (p1 - one_hot_x_t) / (1.0 - t_curr)
-                
-                # Take discrete step forward in time
-                dt = time_points[k] - time_points[k-1]
-                new_probs = one_hot_x_t + dt * u
-                new_probs = torch.clamp(new_probs, min=0.0)
-                new_probs = new_probs / (new_probs.sum(dim=-1, keepdim=True) + 1e-8)
-                x_next = torch.distributions.Categorical(probs=new_probs).sample()
-            else:
-                # At final step, just sample from model prediction
-                x_next = x_0_pred
-            
-            return x_next, x_0_pred
+        time_points = torch.linspace(0, 1, n_steps + 1).to(x_t.device)
         
         # Initialize tracking lists
         traj = [x_t]
         xhat_traj = []
         
         # Forward sampling loop (note: DFM goes forward, unlike CFM/Diffusion)
-        for k in range(1, self.n_steps + 1):
-            x_t, x_0_pred = sample_step(k, x_t, **z)
+        for k in range(n_steps, 0, -1):
+            t_curr = time_points[k]
+            t_next = time_points[k-1]
+            t = t_curr.expand(b, 1)
+            with torch.no_grad():
+                logits = model.forward({"x_t": x_t.float(), "t": t, **z})
+                x_t, x_0_pred = self.sample_step(t_curr, t_next, x_t, logits, **z)
             
             if return_trajectory:
                 traj.append(x_t)

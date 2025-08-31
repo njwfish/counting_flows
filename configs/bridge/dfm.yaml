@@ -1,5 +1,2 @@
 # Discrete Flow Bridge Configuration
-_target_: bridges.baselines.dfm.DiscreteFlowBridge
-
-# Bridge parameters
-n_steps: ${n_steps}  # number of time steps for sampling
+_target_: bridges.torch.dfm.DiscreteFlowBridge

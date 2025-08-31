@@ -74,16 +74,10 @@ def _round_along_G_to_targets_safe(x: torch.Tensor, target_bd: torch.Tensor) -> 
     return y
 
 
-# ---------- helper: robust IPF (KL I-projection) anchored to prior ----------
 @torch.no_grad()
-def _ipf_robust_anchor(
+def rescale(
     x_pred: torch.Tensor,           # [B,G,D] >=0 prior (e.g., softplus(logits))
     C: torch.Tensor,                # [B,D] target aggregates across G
-    keep_rows: bool = True,         # preserve per-(B,G) row totals (anchors mass)
-    smooth_eps: float = 1e-8,       # add tiny support where needed
-    max_iters: int = 100,
-    tol: float = 1e-7,
-    trust_clip: float | None = None # limit per-iteration scaling (e.g., 0.25 for ±25%)
 ):
     """
     KL/I-projection y = argmin_{y>=0, sum_g y=C, (and sum_d y=R if keep_rows)}
@@ -95,51 +89,14 @@ def _ipf_robust_anchor(
     B, G, D = x_pred.shape
     dev = x_pred.device
     dtype = x_pred.dtype
-    eps = 1e-12
 
-    y = x_pred.clamp_min(0).clone()
+    group_sums = x_pred.sum(dim=1, keepdim=True) # shape [B, 1, D]
+    x_pred[(group_sums == 0)] = 1
 
-    # Targets
-    C = C.to(dtype).clamp_min(0)                 # [B,D]
-    R = y.sum(dim=2) if keep_rows else None      # [B,G] anchor row totals
-
-    # Smooth support: ensure feasible columns/rows under KL
-    if smooth_eps > 0:
-        # columns with C>0 must have some support
-        col_zero = (y.sum(dim=1) <= 0) & (C > 0)       # [B,D]
-        if col_zero.any():
-            y = y + smooth_eps * col_zero.unsqueeze(1).to(y.dtype)
-        if keep_rows:
-            row_zero = (y.sum(dim=2) <= 0) & (R > 0)   # [B,G]
-            if row_zero.any():
-                y = y + smooth_eps * row_zero.unsqueeze(-1).to(y.dtype)
-
-    # Iterations
-    for _ in range(max_iters):
-        # Column scaling to match C: scale along G
-        col_sum = y.sum(dim=1).clamp_min(eps)          # [B,D]
-        sC = (C / col_sum).unsqueeze(1)                # [B,1,D]
-        if trust_clip is not None:
-            sC = torch.clamp(sC, 1.0 - trust_clip, 1.0 + trust_clip)
-        y = y * sC
-
-        # Row scaling (optional) to match R: scale along D
-        if keep_rows:
-            row_sum = y.sum(dim=2).clamp_min(eps)      # [B,G]
-            sR = (R / row_sum).unsqueeze(-1)           # [B,G,1]
-            if trust_clip is not None:
-                sR = torch.clamp(sR, 1.0 - trust_clip, 1.0 + trust_clip)
-            y = y * sR
-
-        # Check column residual (hard constraint)
-        if (y.sum(dim=1) - C).abs().max().item() < tol:
-            if not keep_rows or (y.sum(dim=2) - R).abs().max().item() < tol:
-                break
-
-    # Final exact column fix
-    col_sum = y.sum(dim=1).clamp_min(eps)
-    y = y * (C / col_sum).unsqueeze(1)
-
+    # recompute group sums with no zero groups
+    group_sums = x_pred.sum(dim=1, keepdim=True)
+    scale_matrix = x_pred / group_sums # shape [B, G, D]
+    y = C * scale_matrix
     return y
 
 
@@ -300,15 +257,10 @@ class DeconvolutionEnergyScoreLoss(nn.Module):
         C = target_sum.to(device)
 
         # ----- 2) KL/I-projection (IPF) anchored to prior -----
-        y_float = _ipf_robust_anchor(
+        y_float = rescale(
             x_pred=x_pred,
             C=C,
-            keep_rows=keep_rows,
-            smooth_eps=smooth_eps,
-            max_iters=ipf_iters,
-            tol=tol,
-            trust_clip=trust_clip
-        )  # [B,G,D], nonnegative, exact columns; rows preserved if feasible
+        ) 
 
         if return_float:
             return y_float.reshape(B * G, D)  # exact aggregates, minimal KL change
