@@ -4,7 +4,7 @@ defaults:
   - architecture: mlp
   - architecture/in_dims: with_noise_and_context
   - architecture/out_dim: scalar
-  - dataset: normal_deconv
+  - dataset: gaussian_deconv
   - training: deconv
   - slack_sampler: bessel
   - _self_

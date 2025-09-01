@@ -50,7 +50,10 @@ class SkellamBridge:
 
 
             if t is not None:
-                t = cp.full((b, 1), t, dtype=cp.float32)
+                if isinstance(t, float):
+                    t = cp.full((b, 1), t, dtype=cp.float32)
+                else:
+                    t = cp.from_dlpack(t)
             else:
                 if self.homogeneous_time:
                     t = cp.random.rand().expand(b, 1)
@@ -95,7 +98,6 @@ class SkellamBridge:
         # assert cp.all((N_t + diff) % 2 == 0), "N_t + diff should be even"
 
         ρ = (self.weight_schedule(t_next) / self.weight_schedule(t_curr))
-        print(ρ, t_next, t_curr)
         non_zero = N_t > 0
         N_s = cp.zeros_like(N_t)
         N_s[non_zero] = cp.random.binomial(N_t[non_zero], ρ)

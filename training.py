@@ -95,8 +95,14 @@ class Trainer:
     def training_step(self, model: torch.nn.Module, bridge: Any, batch: Dict[str, torch.Tensor]) -> float:
         """Execute a single training step"""
         # Extract data from batch
-        x_0 = batch['x_0'].squeeze(0).to(self.device)  # Target counts
-        x_1 = batch['x_1'].squeeze(0).to(self.device)  # Source counts  
+        if isinstance(batch['x_0'], dict):
+            x_0, x_1 = {}, {}
+            for k in batch['x_0']:
+                x_0[k] = batch['x_0'][k].squeeze(0).to(self.device)
+                x_1[k] = batch['x_1'][k].squeeze(0).to(self.device)
+        else:
+            x_0 = batch['x_0'].squeeze(0).to(self.device)  # Target counts
+            x_1 = batch['x_1'].squeeze(0).to(self.device)  # Source counts  
         
         t, x_t, target = bridge(x_0=x_0, x_1=x_1)
         
@@ -122,7 +128,7 @@ class Trainer:
         
         return loss.item()
     
-    def train_epoch(self, model: torch.nn.Module, bridge: Any, dataloader: DataLoader) -> float:
+    def train_epoch(self, epoch: int, model: torch.nn.Module, bridge: Any, dataloader: DataLoader) -> float:
         """Train for one epoch"""
         epoch_losses = []
         
@@ -168,7 +174,7 @@ class Trainer:
         
         for epoch in range(self.start_epoch, self.num_epochs):
             model.train()
-            epoch_loss = self.train_epoch(model, bridge, dataloader)
+            epoch_loss = self.train_epoch(epoch, model, bridge, dataloader)
             
             # Print progress
             if (epoch + 1) % self.print_every == 0:

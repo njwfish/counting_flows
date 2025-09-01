@@ -195,6 +195,13 @@ def main(cfg: DictConfig) -> None:
         training_plots_dir = output_dir / "training_plots"
         save_plots(plots, str(training_plots_dir))
         logging.info(f"Training plots saved to: {training_plots_dir}")
+
+        # if deconv pass collate_fn to evaluation
+        if cfg.model._target_ == "models.energy_deconv.DeconvolutionEnergyScoreLoss":
+            from training_deconv import sparse_aggregation_collate_fn
+            collate_fn = sparse_aggregation_collate_fn
+        else:
+            collate_fn = None
         
         # Run sampling evaluation
         eval_result = run_sampling_evaluation(
@@ -204,7 +211,8 @@ def main(cfg: DictConfig) -> None:
             output_dir=output_dir,
             n_steps=n_steps,
             n_samples=n_samples,
-            n_epochs=cfg.training.num_epochs
+            n_epochs=cfg.training.num_epochs,
+            collate_fn=collate_fn
         )
     
     # Final summary

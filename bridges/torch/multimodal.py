@@ -1,6 +1,9 @@
-from torch import nn
+import numpy as np
+import torch
+from typing import Dict, Any, Union, Tuple
 
-class MultimodalBridge(nn.Module):
+
+class MultimodalBridge:
     def __init__(self, bridges):
         """
         Define a bridge that combines multiple bridges.
@@ -10,32 +13,49 @@ class MultimodalBridge(nn.Module):
         """
         super().__init__()
         self.bridges = bridges
+        self.keys = list(bridges.keys())
     
     def __call__(self, x_0, x_1, t=None):
-        if t is None:
-            t = torch.rand()
+        # Use same time for all modalities
 
+        # batch size
+        base_arr = x_0[self.keys[0]]
+        b = base_arr.shape[0]
+        device = base_arr.device
+
+        if t is None:            
+            t = torch.rand(b, 1, device=device)
+
+        x_t = {}
+        target = {}
+        
         for k in x_0:
-            t, x_t, x_0 = self.bridges[k](x_0[k], x_1[k], t=t)
-        return t, x_t, x_0
+            t_k, x_t_k, target_k = self.bridges[k](x_0[k], x_1[k], t=t)
+            x_t[k] = x_t_k
+            target[k] = target_k
+            # Use time from first modality (should be same for all)
+            if k == list(x_0.keys())[0]:
+                time_output = t_k
+                
+        return time_output, x_t, target
 
     def sample_step(self, t_curr, t_next, x_t, x_0_pred, **z):
         x_t_next, x_0_next = {}, {}
-        for k in x_0:
+        for k in x_t:  # Use x_t keys instead of x_0
             x_t_next[k], x_0_next[k] = self.bridges[k].sample_step(t_curr, t_next, x_t[k], x_0_pred[k], **z)
         return x_t_next, x_0_next
 
 
     def sampler(
         self,
-        x_1: torch.Tensor,
+        x_1: Dict[str, Any],
         z: Dict[str, Any],
         model,
         return_trajectory: bool = False,
         return_x_hat: bool = False,
         n_steps: int = 10,
         **kwargs
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, ...]]:
+    ) -> Union[Any, Tuple[Any, ...]]:
         """
         Discrete time reverse sampler for Multimodal Bridges.
         
@@ -52,11 +72,13 @@ class MultimodalBridge(nn.Module):
             x_0: Final samples
             Optional: trajectory, x_hat predictions based on flags
         """
-        b = x_1.shape[0]
-        x_t = x_1.float()
+        # Get batch size from any modality
+        b = next(iter(x_1.values())).shape[0]
+        x_t = {k: v.float() for k, v in x_1.items()}
         
         # Move time points to same device as input
-        time_points = torch.linspace(0, 1, n_steps + 1).to(x_t.device)
+        device = next(iter(x_t.values())).device
+        time_points = torch.linspace(0, 1, n_steps + 1).to(device)
         
         # Initialize tracking lists
         traj = {k: [x_t[k]] for k in x_t}
@@ -78,7 +100,7 @@ class MultimodalBridge(nn.Module):
                 for k in x_t:
                     traj[k].append(x_t[k])
             if return_x_hat:
-                for k in x_t:
+                for k in x_0_pred:
                     xhat_traj[k].append(x_0_pred[k])
         
         # Prepare outputs

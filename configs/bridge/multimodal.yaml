@@ -1,0 +1,17 @@
+# Multimodal Bridge Configuration
+_target_: bridges.torch.multimodal.MultimodalBridge
+
+# Individual bridge configurations for each modality
+bridges:
+  img: 
+    _target_: bridges.torch.diffusion.DiffusionBridge
+    beta_min: 0.1
+    beta_max: 20.0
+    device: 0
+    homogeneous_time: false
+  
+  counts:
+    _target_: bridges.cupy.skellam.SkellamBridge 
+    schedule_type: "linear"
+    homogeneous_time: false
+    slack_sampler: ${slack_sampler}

@@ -11,7 +11,7 @@ import hashlib
 import os
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, Iterable, Union, Optional
+from typing import Dict, Any, Iterable, Union, Optional, Callable  
 from bridges.cupy.constrained import SkellamMeanConstrainedBridge
 from bridges.cupy.skellam import SkellamBridge
 from typing import List
@@ -85,7 +85,8 @@ def save_cached_evaluation(eval_data: Dict[str, Any], true_data: Dict[str, Any],
 
 def evaluate_model(model: torch.nn.Module, bridge: Any, dataset: Any, 
                   config_path: Optional[Path] = None, n_samples: int = 1000,
-                  force_regenerate: bool = False, n_steps: int = 10) -> Dict[str, Any]:
+                  force_regenerate: bool = False, n_steps: int = 10,
+                  collate_fn: Optional[Callable] = None) -> Dict[str, Any]:
     """
     Smart evaluation dispatcher with caching and data type detection
     
@@ -113,10 +114,10 @@ def evaluate_model(model: torch.nn.Module, bridge: Any, dataset: Any,
     logging.info(f"Detected data type: {data_type}")
     
     # Generate evaluation data 
-    eval_data = generate_evaluation_data(model, bridge, dataset, n_samples, n_steps)
+    eval_data = generate_evaluation_data(model, bridge, dataset, n_samples, n_steps, collate_fn=collate_fn)
     
     # Generate true distribution data by sampling bridge directly
-    true_data = generate_true_trajectory_data(bridge, dataset, n_samples, n_steps)
+    true_data = generate_true_trajectory_data(bridge, dataset, n_samples, n_steps, collate_fn=collate_fn)
     
     # Compute evaluation metrics
     metrics = compute_evaluation_metrics(eval_data)
@@ -143,27 +144,49 @@ def evaluate_model(model: torch.nn.Module, bridge: Any, dataset: Any,
     }
 
 
+def to_numpy(x):
+    if x is None:
+        return None
+    if isinstance(x, dict):
+        return {k: to_numpy(x[k]) for k in x}
+    if hasattr(x, 'get'):  # CuPy array
+        return x.get()
+    elif hasattr(x, 'cpu'):  # PyTorch tensor
+        return x.cpu().numpy()
+    else:
+        return np.array(x)
+
 def generate_evaluation_data(
     model: torch.nn.Module, 
     bridge: Any, 
     dataset: Any, 
     n_samples: int = 1000, 
-    n_steps: int = 10
+    n_steps: int = 10,
+    collate_fn: Optional[Callable] = None
 ) -> Dict[str, np.ndarray]:
     """Generate evaluation data from trained model"""
     model.eval()
     
     # Get data efficiently using DataLoader
     from torch.utils.data import DataLoader
-    dataloader = DataLoader(dataset, batch_size=n_samples, shuffle=False)
+    dataloader = DataLoader(dataset, batch_size=n_samples, shuffle=False, collate_fn=collate_fn)
     batch = next(iter(dataloader))
     
-    x0_target = batch['x_0'].squeeze(0).numpy()# .reshape(-1, batch['x_0'].shape[-1])
-    x1_source = batch['x_1'].squeeze(0).numpy()# .reshape(-1, batch['x_1'].shape[-1])
+    if isinstance(batch['x_0'], dict):
+        x0_target = {k: batch['x_0'][k].squeeze(0).numpy() for k in batch['x_0']}
+        x1_source = {k: batch['x_1'][k].squeeze(0).numpy() for k in batch['x_1']}
+
+        x0_torch = {k: torch.tensor(x0_target[k]).cuda() for k in x0_target}
+        x1_torch = {k: torch.tensor(x1_source[k]).cuda() for k in x1_source}
+    else:
+        x0_target = batch['x_0'].squeeze(0).numpy()# .reshape(-1, batch['x_0'].shape[-1])
+        x1_source = batch['x_1'].squeeze(0).numpy()# .reshape(-1, batch['x_1'].shape[-1])n
+
+        # Convert to torch tensors only for bridge call
+        x0_torch = torch.tensor(x0_target).cuda()
+        x1_torch = torch.tensor(x1_source).cuda()
     
-    # Convert to torch tensors only for bridge call
-    x0_torch = torch.tensor(x0_target).cuda()
-    x1_torch = torch.tensor(x1_source).cuda()
+
     
     # Check if this is a mean constrained bridge
     is_mean_constrained = isinstance(bridge, SkellamMeanConstrainedBridge)
@@ -195,17 +218,6 @@ def generate_evaluation_data(
         
         # Our bridge sampler always returns (x0_generated, x_trajectory, x_hat_trajectory)
         x0_generated, x_trajectory, x_hat_trajectory = result
-        
-        # Convert to numpy (handles both torch tensors and cupy arrays)
-        def to_numpy(x):
-            if x is None:
-                return None
-            if hasattr(x, 'get'):  # CuPy array
-                return x.get()
-            elif hasattr(x, 'cpu'):  # PyTorch tensor
-                return x.cpu().numpy()
-            else:
-                return np.array(x)
         
         x0_generated = to_numpy(x0_generated)
         x_trajectory = to_numpy(x_trajectory)
@@ -239,23 +251,38 @@ def compute_evaluation_metrics(eval_data: Dict[str, np.ndarray]) -> Dict[str, fl
     """Compute comprehensive evaluation metrics using new metrics module"""
     from metrics import compute_comprehensive_metrics
     
-    # Get comprehensive metrics
-    metrics = compute_comprehensive_metrics(eval_data)
     
     # Add basic compatibility metrics
     x0_generated = eval_data['x0_generated']
     x0_target = eval_data['x0_target']
-    
-    gen_mean = np.mean(x0_generated, axis=0)
-    target_mean = np.mean(x0_target, axis=0)
-    
-    metrics['target_mean'] = target_mean.tolist()
-    metrics['gen_mean'] = gen_mean.tolist()
+
+    if isinstance(x0_generated, dict):
+        metrics = {}
+        gen_mean = {}
+        target_mean = {}
+        for k in x0_generated:
+            eval_data_k = {
+                data_key: eval_data[data_key][k] for data_key in eval_data.keys()
+            }
+            metrics[k] = compute_comprehensive_metrics(eval_data_k)
+            gen_mean[k] = np.mean(x0_generated[k], axis=0)
+            target_mean[k] = np.mean(x0_target[k], axis=0)
+    else:
+        metrics = compute_comprehensive_metrics(eval_data)
+        gen_mean = np.mean(x0_generated, axis=0)
+        target_mean = np.mean(x0_target, axis=0)
+
+    if isinstance(x0_generated, dict):
+        metrics['target_mean'] = {k: target_mean[k].tolist() for k in target_mean}
+        metrics['gen_mean'] = {k: gen_mean[k].tolist() for k in gen_mean}
+    else:
+        metrics['target_mean'] = target_mean.tolist()
+        metrics['gen_mean'] = gen_mean.tolist()
     
     return metrics
 
 
-def generate_true_trajectory_data(bridge: Any, dataset: Any, n_samples: int = 1000, n_steps: int = 10) -> Dict[str, np.ndarray]:
+def generate_true_trajectory_data(bridge: Any, dataset: Any, n_samples: int = 1000, n_steps: int = 10, collate_fn: Optional[Callable] = None) -> Dict[str, np.ndarray]:
     """
     Generate true trajectory data by sampling bridge directly at each time step.
     This is completely bridge-agnostic and doesn't require any dummy models.
@@ -263,36 +290,53 @@ def generate_true_trajectory_data(bridge: Any, dataset: Any, n_samples: int = 10
     from torch.utils.data import DataLoader
     
     # Get data from dataset
-    dataloader = DataLoader(dataset, batch_size=n_samples, shuffle=True)
+    dataloader = DataLoader(dataset, batch_size=n_samples, shuffle=True, collate_fn=collate_fn)
     batch = next(iter(dataloader))
     
-    x0_true = batch['x_0'].squeeze(0).numpy()# .reshape(-1, batch['x_0'].shape[-1])
-    x1_true = batch['x_1'].squeeze(0).numpy()# .reshape(-1, batch['x_1'].shape[-1])
+    if isinstance(batch['x_0'], dict):
+        x0_true = {k: batch['x_0'][k].squeeze(0).numpy() for k in batch['x_0']}
+        x1_true = {k: batch['x_1'][k].squeeze(0).numpy() for k in batch['x_1']}
+
+        x0_torch = {k: torch.tensor(x0_true[k]).cuda() for k in x0_true}
+        x1_torch = {k: torch.tensor(x1_true[k]).cuda() for k in x1_true}
+
+        x_trajectory = {k: [] for k in x0_true}
+        x_hat_trajectory = {k: [] for k in x0_true}
+    else:
+        x0_true = batch['x_0'].squeeze(0).numpy()# .reshape(-1, batch['x_0'].shape[-1])
+        x1_true = batch['x_1'].squeeze(0).numpy()# .reshape(-1, batch['x_1'].shape[-1])
     
-    # Convert to torch tensors
-    x0_torch = torch.tensor(x0_true).cuda() if torch.cuda.is_available() else torch.tensor(x0_true)
-    x1_torch = torch.tensor(x1_true).cuda() if torch.cuda.is_available() else torch.tensor(x1_true)
+        # Convert to torch tensors
+        x0_torch = torch.tensor(x0_true).cuda() if torch.cuda.is_available() else torch.tensor(x0_true)
+        x1_torch = torch.tensor(x1_true).cuda() if torch.cuda.is_available() else torch.tensor(x1_true)
+
+        x_trajectory = []
+        x_hat_trajectory = []
     
     
     # Create time points from 1 to 0
     times = np.linspace(0.0, 1.0, n_steps + 1)
-    
-    # Sample bridge trajectory directly
-    x_trajectory = []
-    x_hat_trajectory = []
-    
+
     with torch.no_grad():
         for i, t in enumerate(times):
             # Sample x_t from bridge at time t
             t, x_t, _ = bridge(x1_torch, x0_torch, t)
-            x_trajectory.append(x_t.cpu().numpy())
-            
-            # For x_hat, the "true" prediction is just x0 (what perfect model should predict)
-            x_hat_trajectory.append(x0_torch.cpu().numpy())
+            if isinstance(x_t, dict):
+                for k in x_t:
+                    x_trajectory[k].append(to_numpy(x_t[k]))
+                    x_hat_trajectory[k].append(to_numpy(x0_torch[k]))
+            else:
+                x_trajectory.append(to_numpy(x_t))
+                x_hat_trajectory.append(to_numpy(x0_torch))
+
     
     # Convert to numpy arrays
-    x_trajectory = np.array(x_trajectory)  # [T, B, d]
-    x_hat_trajectory = np.array(x_hat_trajectory)  # [T, B, d]
+    if isinstance(x_trajectory, dict):
+        x_trajectory = {k: np.array(x_trajectory[k]) for k in x_trajectory}
+        x_hat_trajectory = {k: np.array(x_hat_trajectory[k]) for k in x_hat_trajectory}
+    else:
+        x_trajectory = np.array(x_trajectory)  # [T, B, d]
+        x_hat_trajectory = np.array(x_hat_trajectory)  # [T, B, d]
     
     return {
         'x0_target': x0_true,

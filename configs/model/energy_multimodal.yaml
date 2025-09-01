@@ -1,0 +1,18 @@
+# Multimodal Energy Score Loss Configuration
+_target_: models.energy_multimodal.MultimodalEnergyScoreLoss
+
+# Architecture (will be injected from architecture config)
+architecture: ${architecture}
+
+# Energy score parameters
+noise_dim: 128
+m_samples: 8  # Smaller for faster testing
+lambda_energy: 1.0
+
+# Modality weighting
+img_weight: 1.0
+count_weight: 1.0
+
+# Count-specific parameters
+min_count_value: ${dataset.min_value}
+count_value_range: ${dataset.value_range}
