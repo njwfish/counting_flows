@@ -8,4 +8,3 @@ architecture: ${architecture}
 noise_dim: 100
 m_samples: 16
 lambda_energy: 1.0
-min_value: ${dataset.min_value}

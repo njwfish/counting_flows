@@ -5,12 +5,9 @@ _target_: datasets.mnist_mixture.MNISTLowRankGaussianMixtureDataset
 size: 50000  # Small for testing
 data_dim: 10
 latent_dim: 3
-value_range: 50
+value_range: 256
 min_value: 0
 k: 5  # Number of mixture components (maps to MNIST digits 0-4)
-
-# MNIST parameters
-mnist_data_dir: "datasets/data/mnist"
 
 # Low-rank Gaussian mixture parameters
 seed: 42

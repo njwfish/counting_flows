@@ -2,8 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .energy import EnergyScoreLoss
 
-class MultimodalEnergyScoreLoss(nn.Module):
+class MultimodalEnergyScoreLoss(EnergyScoreLoss):
     """
     Multimodal energy score loss that computes energy scores for both images and counts.
     
@@ -24,74 +25,19 @@ class MultimodalEnergyScoreLoss(nn.Module):
         noise_dim: int = 16,
         m_samples: int = 16,
         lambda_energy: float = 1.0,
-        img_weight: float = 1.0,
-        count_weight: float = 1.0,
-        min_count_value: int = 0,
-        count_value_range: int = 10,
+        weights: dict = None,
     ):
-        super().__init__()
-        self.architecture = architecture
-        self.noise_dim = noise_dim
-        self.m = m_samples
-        self.lambda_energy = lambda_energy
-        self.img_weight = img_weight
-        self.count_weight = count_weight
-        self.min_count_value = min_count_value
-        self.count_value_range = count_value_range
+        super().__init__(
+            architecture=architecture,
+            noise_dim=noise_dim,
+            m_samples=m_samples,
+            lambda_energy=lambda_energy,
+        )
+        self.weights = weights
         
-        # Activation function for counts (to ensure non-negativity)
-        if self.min_count_value == 0:
-            self.count_act_fn = nn.Softplus()
-        else:
-            self.count_act_fn = nn.Identity()
-
-    def _pairwise_dist(self, a, b, eps=1e-6):
-        """
-        Compute pairwise distances for energy score.
-        
-        Args:
-            a: [n, d], b: [m, d] → [n, m] of √(||a_i - b_j||² + eps)
-        """
-        diff = a.unsqueeze(1) - b.unsqueeze(0)      # [n, m, d]
-        sq   = (diff * diff).sum(-1)                # [n, m]
-        return torch.sqrt(torch.clamp(sq, min=eps))
-
-    def _compute_energy_score(self, predictions, target, λ):
-        """
-        Compute energy score for a single modality.
-        
-        Args:
-            predictions: [n, m, d] - m predictions per sample
-            target: [n, d] - target values
-            λ: energy score regularization parameter
-            
-        Returns:
-            energy_score: scalar loss value
-        """
-        n, m = predictions.shape[:2]  # Handle arbitrary dimensions after m
-        
-        # Flatten spatial dimensions for distance computation
-        predictions_flat = predictions.view(n, m, -1)  # [n, m, d_flat]
-        target_flat = target.view(n, -1)  # [n, d_flat]
-        
-        # Confinement term: distance to target
-        target_expanded = target_flat.unsqueeze(1).expand(-1, m, -1)  # [n, m, d_flat]
-        term_conf = (predictions_flat - target_expanded).norm(dim=2).mean(dim=1)  # [n]
-        
-        # Interaction term (efficient batched computation)
-        # Using ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩ identity
-        sq = predictions_flat.pow(2).sum(dim=2)  # [n, m] - squared norms
-        inn = torch.bmm(predictions_flat, predictions_flat.transpose(1,2))  # [n, m, m] - inner products
-        sqd = sq.unsqueeze(2) + sq.unsqueeze(1) - 2*inn  # [n, m, m] - squared distances
-        sqd = torch.clamp(sqd, min=1e-6)  # avoid sqrt(0)
-        d = sqd.sqrt()  # [n, m, m] - distances
-        
-        # Mean of off-diagonal pairwise distances
-        m_mask = torch.ones(m, m, device=predictions.device) - torch.eye(m, device=predictions.device)
-        mean_pd = (d * m_mask).sum(dim=(1,2)) / (m * (m - 1))  # [n]
-        term_int = (λ / 2.0) * mean_pd  # [n]
-        
-        return (term_conf - term_int).mean()
+        if self.weights is None:
+            from collections import defaultdict
+            self.weights = defaultdict(lambda: 1.0)
 
     def forward(self, inputs, eps=None):
         """
@@ -125,27 +71,16 @@ class MultimodalEnergyScoreLoss(nn.Module):
             )
         else:
             inputs_with_noise['noise'] = eps
-        
-        # Get predictions
-        raw_predictions = self.architecture(**inputs_with_noise)
-        
-        # Apply activation functions per modality
-        predictions = {}
-        if 'img' in raw_predictions:
-            predictions['img'] = raw_predictions['img']  # No activation for images
-        if 'counts' in raw_predictions:
-            predictions['counts'] = self.count_act_fn(raw_predictions['counts'])
             
-        return predictions
+        return self.architecture(**inputs_with_noise)
 
     def loss(self, target, inputs):
         """
         Compute multimodal energy score loss.
         
         Args:
-            target: Dict with 'img' and 'counts' target values
-                   - target['img']: [n, C, H, W] target images
-                   - target['counts']: [n, count_dim] target count vectors
+            target: Dict with target values
+                   - target[k]: [n, ...] target values for modality k
             inputs: Dict of input tensors for model
             
         Returns:
@@ -192,22 +127,14 @@ class MultimodalEnergyScoreLoss(nn.Module):
         replicated_inputs['noise'] = noise
 
         # Get all predictions: [n*m, ...] for each modality
-        raw_predictions = self.architecture(**replicated_inputs)
+        predictions = self.architecture(**replicated_inputs)
         
         total_loss = 0.0
         
-        # Process each modality separately
-        if 'img' in target and 'img' in raw_predictions:
-            # Image predictions: [n*m, C, H, W] → [n, m, C, H, W]
-            img_predictions = raw_predictions['img'].reshape(n, self.m, *raw_predictions['img'].shape[1:])
-            img_loss = self._compute_energy_score(img_predictions, target['img'], λ)
-            total_loss += self.img_weight * img_loss
-            
-        if 'counts' in target and 'counts' in raw_predictions:
-            # Count predictions: [n*m, count_dim] → [n, m, count_dim] 
-            count_predictions = self.count_act_fn(raw_predictions['counts']).reshape(n, self.m, -1)
-            count_loss = self._compute_energy_score(count_predictions, target['counts'], λ)
-            total_loss += self.count_weight * count_loss
+        for k in predictions:
+            predictions_k = predictions[k].reshape(n, self.m, *predictions[k].shape[1:])
+            loss = self._compute_energy_score(predictions_k, target[k], λ)
+            total_loss += self.weights[k] * loss
 
         return total_loss
 
@@ -216,15 +143,25 @@ class MultimodalEnergyScoreLoss(nn.Module):
         Sample prediction using arbitrary kwargs inputs.
         
         Returns:
-            Dict with 'img' and 'counts' predictions
+            Dict with predictions for each modality
         """
+        # this lets us condition on x_0 if x_0 is provided
+        if 'x_0' in kwargs:
+            x_0 = kwargs['x_0']
+            del kwargs['x_0']
+        else:
+            x_0 = {}
+
         predictions = self.forward(kwargs)
         
         # Post-process predictions
         result = {}
-        if 'img' in predictions:
-            result['img'] = predictions['img']
-        if 'counts' in predictions:
-            result['counts'] = predictions['counts'].round().long()
+        for k in predictions:
+            # if x_0 is provided, use it instead of predictions
+            # this lets us use "conditional" sampling where we condition on one modality
+            # while the rest are sampled from the model
+            result[k] = x_0[k] if k in x_0 else predictions[k]
+            if k == 'counts':
+                result[k] = result[k].round().long()
             
         return result

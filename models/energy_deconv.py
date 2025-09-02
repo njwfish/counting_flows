@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 
 
-
+from .energy import EnergyScoreLoss
 
 @torch.no_grad()
 def rescale(
@@ -26,11 +26,7 @@ def rescale(
     dev = x_pred.device
     dtype = x_pred.dtype
 
-    # Compute group sums: [G, D]
-    if agg.is_sparse:
-        group_sums = torch.sparse.mm(agg, x_pred)  # [G, D]
-    else:
-        group_sums = agg @ x_pred  # [G, D]
+    group_sums = agg @ x_pred  # [G, D]
     
     # Handle zero columns by setting them to 1 (avoid division by zero)
     group_sums = torch.where(group_sums == 0, torch.ones_like(group_sums), group_sums)
@@ -38,20 +34,8 @@ def rescale(
     # Compute scaling factors: C[g,d] / group_sums[g,d] for each group
     scale_factors = C / group_sums  # [G, D]
     
-    # Map scaling factors back to individual elements
-    # For each element x[i,d], we need scale_factors[g,d] where g is the group of element i
-    if agg.is_sparse:
-        # For sparse matrix, we need to map group indices back to element indices
-        # agg is [G, B], we need the transpose operation to broadcast scaling
-        agg_t = agg.t()  # [B, G] - each row has 1 in the column corresponding to its group
-        
-        # Broadcast scaling factors to all elements: [B, D]
-        # agg_t @ scale_factors gives us the scale factor for each element
-        element_scales = torch.sparse.mm(agg_t, scale_factors)  # [B, D]
-    else:
-        # For dense matrix, similar operation
-        agg_t = agg.t()  # [B, G]
-        element_scales = agg_t @ scale_factors  # [B, D]
+    agg_t = agg.t()  # [B, G]
+    element_scales = agg_t @ scale_factors  # [B, D]
     
     # Apply element-wise rescaling
     y = x_pred * element_scales  # [B, D]
@@ -207,7 +191,7 @@ def fully_vectorized_randomized_round_to_targets(
 
 
 
-class DeconvolutionEnergyScoreLoss(nn.Module):
+class DeconvolutionEnergyScoreLoss(EnergyScoreLoss):
     """
     Distributional-diffusion energy score loss (eq.14) with m-sample approximation.
     Works with arbitrary architectures and clean input interface.
@@ -218,29 +202,13 @@ class DeconvolutionEnergyScoreLoss(nn.Module):
         noise_dim: int = 16,
         m_samples: int = 16,
         lambda_energy: float = 1.0,
-        min_value: int = 0,
-        value_range: int = 10,
     ):
-        super().__init__()
-        self.architecture = architecture
-        self.noise_dim = noise_dim
-        self.m = m_samples
-        self.lambda_energy = lambda_energy
-        self.min_value = min_value
-        self.value_range = value_range
-        if self.min_value == 0:
-            self.act_fn = nn.Softplus()
-        else:
-            self.act_fn = nn.Identity()
-
-    def _pairwise_dist(self, a, b, eps=1e-6):
-        """
-        Compute pairwise distances for energy score
-        a: [n, d], b: [m, d] → [n, m] of √(||a_i - b_j||² + eps)
-        """
-        diff = a.unsqueeze(1) - b.unsqueeze(0)      # [n, m, d]
-        sq   = (diff * diff).sum(-1)                # [n, m]
-        return torch.sqrt(torch.clamp(sq, min=eps))
+        super().__init__(
+            architecture=architecture,
+            noise_dim=noise_dim,
+            m_samples=m_samples,
+            lambda_energy=lambda_energy,
+        )
 
     def forward(self, inputs, eps=None):
         """
@@ -267,7 +235,7 @@ class DeconvolutionEnergyScoreLoss(nn.Module):
         for key, value in inputs_with_noise.items():
             print(key, value.shape)
         
-        return self.act_fn(self.architecture(**inputs_with_noise))
+        return self.architecture(**inputs_with_noise)
 
     def loss(self, target, inputs, agg):
         """
@@ -293,7 +261,7 @@ class DeconvolutionEnergyScoreLoss(nn.Module):
         replicated_inputs['noise'] = noise
 
         # Get all predictions: [n*m, x_dim] → view [n, m, x_dim]
-        predictions = self.act_fn(self.architecture(**replicated_inputs)).reshape(n, self.m, -1)
+        predictions = self.architecture(**replicated_inputs).reshape(n, self.m, -1)
         
         # Apply sparse aggregation: [G, B] @ [B, m*D] → [G, m*D] → [G, m, D]
         B, m, d = predictions.shape
@@ -301,25 +269,8 @@ class DeconvolutionEnergyScoreLoss(nn.Module):
         agg_predictions_flat = agg @ predictions_flat  # [G, m*D]
         predictions = agg_predictions_flat.view(agg.shape[0], m, d)  # [G, m, D]
 
-        # Confinement term: distance to target
-        target_expanded = target.unsqueeze(1).expand(-1, self.m, -1)
-        term_conf = (predictions - target_expanded).norm(dim=2).mean(dim=1)  # [n]
+        return self._compute_energy_score(predictions, target, λ)
 
-        # Interaction term (efficient batched computation)
-        # Using ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩ identity
-        sq = predictions.pow(2).sum(dim=2)  # [n, m] - squared norms
-        inn = torch.bmm(predictions, predictions.transpose(1,2))  # [n, m, m] - inner products
-        sqd = sq.unsqueeze(2) + sq.unsqueeze(1) - 2*inn  # [n, m, m] - squared distances
-        sqd = torch.clamp(sqd, min=1e-6)  # avoid sqrt(0)
-        d = sqd.sqrt()  # [n, m, m] - distances
-        
-        # Mean of off-diagonal pairwise distances
-        # Create mask for off-diagonal elements on the fly
-        m_mask = torch.ones(self.m, self.m, device=predictions.device) - torch.eye(self.m, device=predictions.device)
-        mean_pd = (d * m_mask).sum(dim=(1,2)) / (self.m * (self.m - 1))  # [n]
-        term_int = (λ / 2.0) * mean_pd  # [n]
-
-        return (term_conf - term_int).mean()
 
     def sample(self, **kwargs):
         """
@@ -366,7 +317,7 @@ class DeconvolutionEnergyScoreLoss(nn.Module):
         flat_inputs['noise'] = noise
         if 'A' in flat_inputs:
             del flat_inputs['A']
-        x_pred = self.act_fn(self.architecture(**flat_inputs))          # [B*G, D] (logits or reals)
+        x_pred = self.architecture(**flat_inputs)          # [B*G, D] (logits or reals)
 
         # Optional: normalize tiny columns to avoid degenerate zeros with positive targets
         # (ipf_robust_anchor also smooths)

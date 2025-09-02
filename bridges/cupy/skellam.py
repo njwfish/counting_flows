@@ -84,7 +84,7 @@ class SkellamBridge:
             return t, x_t, x_0 - x_t if self.delta else x_0
 
 
-    def sample_step(self, t_curr, t_next, x_t, model_out, **z):
+    def sample_step(self, t_curr, t_next, x_t, model_out, return_in_backend: bool = True, **z):
         x0_hat_t = cp.from_dlpack(model_out) + x_t if self.delta else cp.from_dlpack(model_out)
         
         x0_hat_t = x0_hat_t.round().astype(cp.int32)
@@ -116,6 +116,8 @@ class SkellamBridge:
         M_s = (N_s - diff_s) // 2 
         # assert cp.all((N_s - diff_s) % 2 == 0), "N_s - diff_s should be even"
 
+        if return_in_backend:
+            return dlpack_backend(x_s, x0_hat_t, backend=self.backend, dtype="float32")
         return x_s, x0_hat_t
     
     def sampler(
@@ -149,7 +151,7 @@ class SkellamBridge:
                 if guidance_x_0 is not None:
                     x0_hat_t =  guidance_schedule[k] * guidance_x_0 + (1 - guidance_schedule[k]) * x0_hat_t
 
-                x_t, x0_hat_t = self.sample_step(t_curr, t_next, x_t, model_out, **z)
+                x_t, x0_hat_t = self.sample_step(t_curr, t_next, x_t, model_out, **z, return_in_backend=False)
 
                 if return_trajectory: traj.append(x_t)
                 if return_x_hat:     xhat_traj.append(x0_hat_t)
@@ -157,4 +159,4 @@ class SkellamBridge:
             outs = [x_t]
             if return_trajectory: outs.append(cp.stack(traj))
             if return_x_hat:      outs.append(cp.stack(xhat_traj))
-            return dlpack_backend(*outs, backend=self.backend, dtype="float32") if len(outs) > 1 else dlpack_backend(x_t, backend=self.backend, dtype="float32") 
+            return dlpack_backend(*outs, backend=self.backend, dtype="float32") if len(outs) > 1 else dlpack_backend(x_t, backend=self.backend, dtype="float32")[0]

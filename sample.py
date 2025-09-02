@@ -104,6 +104,7 @@ def run_sampling_evaluation(
                 save_plots(plots, str(plots_dir))
                 logging.info(f"Plots saved to: {plots_dir}")
         else:
+            plots = {}
             sample_figs = plot_model_samples(eval_data, title=f"Samples (n_steps={n_steps})", true_data=true_data)
             plots.update(sample_figs)
         

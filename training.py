@@ -104,6 +104,7 @@ class Trainer:
             x_0 = batch['x_0'].squeeze(0).to(self.device)  # Target counts
             x_1 = batch['x_1'].squeeze(0).to(self.device)  # Source counts  
         
+    
         t, x_t, target = bridge(x_0=x_0, x_1=x_1)
         
         # Extract inputs and outputs from bridge

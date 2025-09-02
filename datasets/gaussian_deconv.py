@@ -72,24 +72,16 @@ class DeconvolutionGaussianMixtureDataset(Dataset):
                 **kwargs
             )
         
-        # Create component index lists and pre-compute all groups
-        self._create_component_indices()
+        # Pre-compute all groups directly from mixture components
         self._pre_compute_all_groups(seed)
         
-    def _create_component_indices(self):
-        """Create lists of indices for each mixture component"""
-        self.component_indices = [[] for _ in range(self.k)]
-        
-        # Group indices by their component assignment
-        for idx in range(self.size):
-            component = self.mixture_dataset.x0_components[idx].item()
-            self.component_indices[component].append(idx)
+
             
     def _pre_compute_all_groups(self, seed: int):
-        """Pre-compute all groups using Dirichlet weights"""
+        """Pre-compute all groups by directly sampling from mixture components"""
         # Use torch's random state for consistent seeding
         with torch.random.fork_rng():
-            torch.manual_seed(seed)  # Different seed to avoid conflicts
+            torch.manual_seed(seed + 1000)  # Different seed to avoid conflicts
             
             # Sample Dirichlet weights for component allocation
             # Shape: [size, k] - each row sums to 1, represents component proportions
@@ -103,42 +95,34 @@ class DeconvolutionGaussianMixtureDataset(Dataset):
             
             # Create each group
             for group_idx in range(self.size):
-                # Convert weights to actual counts for this group
-                counts = torch.multinomial(
+                # Sample component assignments for this group
+                component_assignments = torch.multinomial(
                     component_weights[group_idx], 
                     self.group_size, 
                     replacement=True
                 )
-                # Count how many from each component
-                component_counts = torch.bincount(counts, minlength=self.k)
                 
-                # Sample actual group members from each component
+                # Sample actual group members from existing dataset samples  
                 group_members = []
-                group_components = []
-                for component_id in range(self.k):
-                    count = component_counts[component_id].item()
-                    if count > 0:
-                        # Sample 'count' members from this component's indices (with replacement)
-                        available_indices = self.component_indices[component_id]
-                        if len(available_indices) > 0:
-                            sampled_indices = torch.randint(
-                                0, len(available_indices), (count,)
-                            )
-                            
-                            # Get their x_0 values and store component info
-                            for sampled_idx in sampled_indices:
-                                member_idx = available_indices[sampled_idx.item()]
-                                member_sample = self.mixture_dataset[member_idx]
-                                group_members.append(member_sample['x_0'])
-                                group_components.append(component_id)
+                for member_idx, component_id in enumerate(component_assignments):
+                    component_id = component_id.item()
+                    
+                    # Find all samples from this component
+                    component_mask = (self.mixture_dataset.x0_components == component_id)
+                    component_indices = torch.where(component_mask)[0]
+                    
+                    # Randomly select one sample from this component (allows duplicates)
+                    selected_idx = component_indices[torch.randint(0, len(component_indices), (1,))]
+                    sample = self.mixture_dataset.x0_data[selected_idx.item()]
+                    
+                    group_members.append(sample)
                 
                 # Store the group and component info
-                # Note: with sufficient samples, we should always get exactly group_size members
                 self.groups[group_idx] = torch.stack(group_members)
-                self.group_component_info[group_idx] = torch.tensor(group_components)
+                self.group_component_info[group_idx] = component_assignments
                 
                 # Pre-compute one-hot vectors for each group member
-                for member_idx, component_id in enumerate(group_components):
+                for member_idx, component_id in enumerate(component_assignments):
                     self.group_one_hot[group_idx, member_idx, component_id] = 1.0
 
     def __len__(self): 
@@ -182,18 +166,16 @@ class DeconvolutionMNISTGaussianMixtureDataset(DeconvolutionGaussianMixtureDatas
     
     def __init__(
         self,
-        mnist_data_dir: str = "datasets/data/mnist",
         **kwargs
     ):
         """
         Args:
-            mnist_data_dir: Directory for MNIST data
             **kwargs: Arguments passed to parent DeconvolutionGaussianMixtureDataset
         """
         super().__init__(**kwargs)
         
         # Load MNIST dataset
-        self.mnist_dataset = DiffMNIST(mnist_data_dir)
+        self.mnist_dataset = DiffMNIST()
         
         # Group MNIST data by digit labels (0-9) to align with mixture components
         self.mnist_by_digit = {}
@@ -208,24 +190,32 @@ class DeconvolutionMNISTGaussianMixtureDataset(DeconvolutionGaussianMixtureDatas
         """Pre-compute MNIST image selections based on mixture component assignments"""
         self.mnist_selections = torch.zeros(self.size, self.group_size, dtype=torch.long)
         
-        for group_idx in range(self.size):
-            # Get component assignments for this group
-            component_assignments = self.group_component_info[group_idx]
+        # Vectorized MNIST selection
+        # Flatten all component assignments and convert to digits
+        all_component_assignments = self.group_component_info.flatten()  # [size * group_size]
+        all_digits = all_component_assignments % 10
+        
+        # Pre-allocate result tensor
+        all_selections = torch.zeros_like(all_component_assignments)
+        
+        # Process each digit (0-9) in batch
+        for digit in range(10):
+            # Find all positions that need this digit
+            digit_mask = (all_digits == digit)
+            n_needed = digit_mask.sum().item()
             
-            for member_idx, component_id in enumerate(component_assignments):
-                # Use component_id as MNIST digit (mod 10 for safety)
-                digit = component_id.item() % 10
-                
-                # Randomly select an MNIST image of this digit
+            if n_needed > 0:
+                # Get indices for this digit
                 digit_indices = self.mnist_by_digit[digit]
-                if len(digit_indices) > 0:
-                    selected_idx = digit_indices[torch.randint(0, len(digit_indices), (1,))]
-                    self.mnist_selections[group_idx, member_idx] = selected_idx
-                else:
-                    # Fallback: random MNIST image
-                    self.mnist_selections[group_idx, member_idx] = torch.randint(
-                        0, len(self.mnist_dataset), (1,)
-                    )
+                
+                # Randomly select n_needed indices (with replacement)
+                selected_indices = digit_indices[torch.randint(0, len(digit_indices), (n_needed,))]
+                
+                # Assign to the appropriate positions
+                all_selections[digit_mask] = selected_indices
+        
+        # Reshape back to [size, group_size]
+        self.mnist_selections = all_selections.reshape(self.size, self.group_size)
     
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         # Get the base Gaussian mixture data
@@ -250,5 +240,5 @@ class DeconvolutionMNISTGaussianMixtureDataset(DeconvolutionGaussianMixtureDatas
                 'img': mnist_noise.float(),       # [group_size, 1, 28, 28]
                 'counts': base_data['x_1']        # [group_size, data_dim]
             },
-            'X_0': base_data['X_0']               # [data_dim] - sum of Gaussian counts only
+            'X_0': {'counts': base_data['X_0']}               # [data_dim] - sum of Gaussian counts only
         }

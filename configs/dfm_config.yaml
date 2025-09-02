@@ -8,6 +8,8 @@ defaults:
   - training: default
   - _self_
 
+
+
 # Hydra configuration
 hydra:
   job:

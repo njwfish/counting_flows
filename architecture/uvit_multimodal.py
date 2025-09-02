@@ -61,7 +61,8 @@ class CountDecoder(nn.Module):
         self.count_decoder = nn.Sequential(
             nn.Linear(embed_dim * num_count_patches, embed_dim * 2),
             nn.GELU(),
-            nn.Linear(embed_dim * 2, count_dim)
+            nn.Linear(embed_dim * 2, count_dim),
+            nn.Softplus()
         )
         
     def forward(self, count_patches):
@@ -230,8 +231,9 @@ class MultimodalUViT(nn.Module):
         x = torch.cat([img_patches, count_patches], dim=1)  # [B, total_patches, embed_dim]
         
         # Add time embedding
-        t_flat = t.squeeze(-1) if t.dim() > 1 else t  # Ensure t is 1D: [B]
+        t_flat = t.squeeze() if t.dim() > 1 else t  # Ensure t is 1D: [B]
         time_token = self.time_embed(timestep_embedding(t_flat, self.embed_dim))
+        time_token = time_token.unsqueeze(1)
         x = torch.cat((time_token, x), dim=1)  # [B, 1 + total_patches, embed_dim]
         
         # Project noise to embed_dim and then embed

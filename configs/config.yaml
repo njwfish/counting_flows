@@ -9,6 +9,9 @@ defaults:
   - slack_sampler: bessel
   - _self_
 
+architecture:
+  act_fn: softplus
+  
 # Hydra configuration
 hydra:
   job:

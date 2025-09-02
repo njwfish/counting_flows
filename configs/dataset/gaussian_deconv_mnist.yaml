@@ -1,0 +1,17 @@
+# MNIST + Gaussian Deconvolution Dataset Configuration
+_target_: datasets.gaussian_deconv.DeconvolutionMNISTGaussianMixtureDataset
+
+# Dataset parameters
+base_size: 50000  # Total individual samples (will be grouped)
+data_dim: 10
+value_range: 256
+min_value: 0
+k: 5  # Number of mixture components (maps to MNIST digits 0-4)
+group_size: 10  # Individuals per group
+context_dim: 5  # Should equal k
+
+# Gaussian mixture parameters
+seed: 42
+mean_scale: 5.0
+cov_scale: 2.0
+min_eigenvalue: 0.1

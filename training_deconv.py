@@ -184,8 +184,15 @@ class DeconvTrainer(Trainer):
     def training_step(self, model: torch.nn.Module, bridge: Any, batch: Dict[str, torch.Tensor]) -> float:
         """Execute a single training step"""
         # Extract data from batch
-        x_0 = batch['x_0'].to(self.device)  # Target counts
-        x_1 = batch['x_1'].to(self.device)  # Source counts  
+        if isinstance(batch['x_0'], dict):
+            x_0, x_1 = {}, {}
+            for k in batch['x_0']:
+                x_0[k] = batch['x_0'][k].to(self.device)
+                x_1[k] = batch['x_1'][k].to(self.device)
+        else:
+            x_0 = batch['x_0'].to(self.device)  # Target counts
+            x_1 = batch['x_1'].to(self.device)  # Source counts  
+
         A = batch['A']
         
         # Apply bridge to get diffusion samples
@@ -196,11 +203,17 @@ class DeconvTrainer(Trainer):
             "x_t": x_t,
             "A": A,
         }
-        target = batch['X_0'] - A @ x_t if bridge.delta else batch['X_0']
+        # target = batch['X_0'] - A @ x_t if bridge.delta else batch['X_0']
+        if isinstance(x_0, dict):
+            target = {}
+            target['x_0'] = x_0
+            target['X_0'] = batch['X_0']
+        else:
+            target = batch['X_0']
 
         for key in batch:
             if key != 'x_0' and key != 'x_1' and key != 'A' and key != 'group_sizes' and key != 'X_0':
-                inputs[key] = batch[key].squeeze(0).to(self.device)
+                inputs[key] = batch[key].to(self.device)
                 if 'key' == 'class_emb' and self.classifier_free_guidance_prob > 0:
                     # random mask out prob of the class embeddings
                     mask = torch.rand(inputs[key].shape[0]) < self.classifier_free_guidance_prob
@@ -222,18 +235,39 @@ class DeconvTrainer(Trainer):
         model.eval()
         batches = []
         for batch in dataloader:
-            x_1 = batch['x_1'].to(self.device)
-            batch['X_0'] = batch['X_0'].to(self.device)
+            if isinstance(batch['x_1'], dict):
+                x_1 = {}
+                for k in batch['x_1']:
+                    x_1[k] = batch['x_1'][k].to(self.device)
+            else:
+                x_1 = batch['x_1'].to(self.device)
+            
+            if isinstance(batch['X_0'], dict):
+                for k in batch['X_0']:
+                    batch['X_0'][k] = batch['X_0'][k].to(self.device)
+            else:
+                batch['X_0'] = batch['X_0'].to(self.device)
             
             context = {'target_sum': batch['X_0']}
             for key in batch:
-                batch[key] = batch[key].to(self.device)
                 if key not in ['x_1', 'x_0', 'X_0', 'group_sizes']:
+                    batch[key] = batch[key].to(self.device)
                     context[key] = batch[key].to(self.device)
+
+            if isinstance(batch['x_0'], dict):
+                # this lets us condition on x_0 if it is provided (and not in X_0)
+                # using the fact that the model "samples" from x_0 if x_0 is provided, e.g. "conditional" sampling
+                # across modalities 
+                context_x_0 = {}
+                for k in batch['x_0']:
+                    if k not in batch['X_0']:
+                        context_x_0[k] = batch['x_0'][k].to(self.device)
+
+                context['x_0'] = context_x_0
 
             batch['x_0'] = bridge.sampler(
                 x_1, context, model
-            )[0]
+            )
 
             batches.append(batch)
 

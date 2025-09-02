@@ -197,7 +197,7 @@ def main(cfg: DictConfig) -> None:
         logging.info(f"Training plots saved to: {training_plots_dir}")
 
         # if deconv pass collate_fn to evaluation
-        if cfg.model._target_ == "models.energy_deconv.DeconvolutionEnergyScoreLoss":
+        if 'deconv' in cfg.model._target_:
             from training_deconv import sparse_aggregation_collate_fn
             collate_fn = sparse_aggregation_collate_fn
         else:

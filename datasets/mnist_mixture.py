@@ -34,7 +34,6 @@ class MNISTGaussianMixtureDataset(Dataset):
         value_range: int = 1024,
         min_value: int = 0,
         k: int = 5,  # Number of mixture components (should be <= 10 for MNIST digits)
-        mnist_data_dir: str = "datasets/data/mnist",
         seed: int = 42,
         **gaussian_kwargs  # Additional args for GaussianMixtureDataset
     ):
@@ -45,7 +44,6 @@ class MNISTGaussianMixtureDataset(Dataset):
             value_range: Maximum value for integer count outputs
             min_value: Minimum value for integer count outputs
             k: Number of mixture components (maps to MNIST digits 0 to k-1)
-            mnist_data_dir: Directory for MNIST data
             seed: Random seed for reproducibility
             **gaussian_kwargs: Additional arguments for GaussianMixtureDataset
         """
@@ -55,11 +53,10 @@ class MNISTGaussianMixtureDataset(Dataset):
         self.value_range = value_range
         self.min_value = min_value
         self.k = min(k, 10)  # Cap at 10 MNIST digits
-        self.mnist_data_dir = mnist_data_dir
         self.seed = seed
         
         # Load MNIST dataset
-        self.mnist_dataset = DiffMNIST(mnist_data_dir)
+        self.mnist_dataset = DiffMNIST()
         
         # Create Gaussian mixture dataset for counts
         self.gaussian_dataset = GaussianMixtureDataset(
@@ -104,21 +101,14 @@ class MNISTGaussianMixtureDataset(Dataset):
                 digit_x1 = component_x1 % 10
                 
                 # Select random MNIST images of the appropriate digits
-                if len(self.mnist_by_digit[digit_x0]) > 0:
-                    self.mnist_indices_x0[idx] = self.mnist_by_digit[digit_x0][
-                        torch.randint(0, len(self.mnist_by_digit[digit_x0]), (1,))
-                    ]
-                else:
-                    # Fallback: random image
-                    self.mnist_indices_x0[idx] = torch.randint(0, len(self.mnist_dataset), (1,))
+                # Note: MNIST always has images for all digits 0-9, so no fallback needed
+                self.mnist_indices_x0[idx] = self.mnist_by_digit[digit_x0][
+                    torch.randint(0, len(self.mnist_by_digit[digit_x0]), (1,))
+                ]
                 
-                if len(self.mnist_by_digit[digit_x1]) > 0:
-                    self.mnist_indices_x1[idx] = self.mnist_by_digit[digit_x1][
-                        torch.randint(0, len(self.mnist_by_digit[digit_x1]), (1,))
-                    ]
-                else:
-                    # Fallback: random image
-                    self.mnist_indices_x1[idx] = torch.randint(0, len(self.mnist_dataset), (1,))
+                self.mnist_indices_x1[idx] = self.mnist_by_digit[digit_x1][
+                    torch.randint(0, len(self.mnist_by_digit[digit_x1]), (1,))
+                ]
 
     def __len__(self):
         return self.size
@@ -162,7 +152,6 @@ class MNISTLowRankGaussianMixtureDataset(Dataset):
         value_range: int = 1024,
         min_value: int = 0,
         k: int = 5,  # Number of mixture components
-        mnist_data_dir: str = "datasets/data/mnist",
         seed: int = 42,
         **gaussian_kwargs  # Additional args for LowRankGaussianMixtureDataset
     ):
@@ -174,7 +163,6 @@ class MNISTLowRankGaussianMixtureDataset(Dataset):
             value_range: Maximum value for integer count outputs
             min_value: Minimum value for integer count outputs
             k: Number of mixture components (maps to MNIST digits 0 to k-1)
-            mnist_data_dir: Directory for MNIST data
             seed: Random seed for reproducibility
             **gaussian_kwargs: Additional arguments for LowRankGaussianMixtureDataset
         """
@@ -185,11 +173,10 @@ class MNISTLowRankGaussianMixtureDataset(Dataset):
         self.value_range = value_range
         self.min_value = min_value
         self.k = min(k, 10)  # Cap at 10 MNIST digits
-        self.mnist_data_dir = mnist_data_dir
         self.seed = seed
         
         # Load MNIST dataset
-        self.mnist_dataset = DiffMNIST(mnist_data_dir)
+        self.mnist_dataset = DiffMNIST()
         
         # Create low-rank Gaussian mixture dataset for counts
         self.gaussian_dataset = LowRankGaussianMixtureDataset(
@@ -235,21 +222,14 @@ class MNISTLowRankGaussianMixtureDataset(Dataset):
                 digit_x1 = component_x1 % 10
                 
                 # Select random MNIST images of the appropriate digits
-                if len(self.mnist_by_digit[digit_x0]) > 0:
-                    self.mnist_indices_x0[idx] = self.mnist_by_digit[digit_x0][
-                        torch.randint(0, len(self.mnist_by_digit[digit_x0]), (1,))
-                    ]
-                else:
-                    # Fallback: random image
-                    self.mnist_indices_x0[idx] = torch.randint(0, len(self.mnist_dataset), (1,))
+                # Note: MNIST always has images for all digits 0-9, so no fallback needed
+                self.mnist_indices_x0[idx] = self.mnist_by_digit[digit_x0][
+                    torch.randint(0, len(self.mnist_by_digit[digit_x0]), (1,))
+                ]
                 
-                if len(self.mnist_by_digit[digit_x1]) > 0:
-                    self.mnist_indices_x1[idx] = self.mnist_by_digit[digit_x1][
-                        torch.randint(0, len(self.mnist_by_digit[digit_x1]), (1,))
-                    ]
-                else:
-                    # Fallback: random image
-                    self.mnist_indices_x1[idx] = torch.randint(0, len(self.mnist_dataset), (1,))
+                self.mnist_indices_x1[idx] = self.mnist_by_digit[digit_x1][
+                    torch.randint(0, len(self.mnist_by_digit[digit_x1]), (1,))
+                ]
 
     def __len__(self):
         return self.size

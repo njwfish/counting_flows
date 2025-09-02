@@ -87,9 +87,9 @@ class MultimodalBridge:
         # Reverse sampling loop
         for k in range(n_steps, 0, -1):
             # Current time point
-            t_curr = time_points[k]
-            t_next = time_points[k-1]
-            t = t_curr.expand(b, 1)
+            t_curr = time_points[k].item()
+            t_next = time_points[k-1].item()
+            t = time_points[k].expand(b, 1)
             
             # Predict x_0 from current noisy state
             with torch.no_grad():

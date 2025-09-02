@@ -162,6 +162,8 @@ class DiffusionBridge:
 
     def sample_step(self, t_curr, t_next, x_t, x_0_pred, **z):
         """Single reverse sampling step using discrete time"""
+        if isinstance(t_curr, float):
+            t_curr, t_next = torch.tensor(t_curr, device=x_t.device), torch.tensor(t_next, device=x_t.device)
         # Compute reverse SDE step from x_0 prediction
         alpha = self.sde.cum_alpha(t_curr)
         beta = self.sde.cum_beta(t_curr)
