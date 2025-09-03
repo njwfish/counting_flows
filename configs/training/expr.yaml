@@ -1,22 +1,24 @@
 # Default Training Configuration
 
 # Trainer instantiation
-_target_: training_deconv.DeconvTrainer
+_target_: training.Trainer
 
 # Training parameters
-num_epochs: 5000
-learning_rate: 1e-3
+num_epochs: 500
+learning_rate: 2e-4
 weight_decay: 0.0
 
 # Device and computation
 device: ${device}
 
 # DataLoader parameters
-batch_size: 256
+batch_size: 1
 shuffle: true
 num_workers: 0
 
 # Logging and checkpointing
-print_every: 10
-save_every: 50
+print_every: 1
+save_every: 5
 # output_dir is now passed automatically by main.py
+
+classifier_free_guidance_prob: 0.1

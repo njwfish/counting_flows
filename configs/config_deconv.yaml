@@ -4,10 +4,13 @@ defaults:
   - architecture: mlp
   - architecture/in_dims: with_noise_and_context
   - architecture/out_dim: scalar
-  - dataset: normal_deconv
+  - dataset: gaussian_deconv
   - training: deconv
   - slack_sampler: bessel
   - _self_
+
+architecture:
+  act_fn: softplus
 
 # Hydra configuration
 hydra:
@@ -19,7 +22,6 @@ hydra:
 # Global settings
 device: cuda
 seed: 42
-n_steps: 10
 train_split: 0.8  # 80% train, 20% eval
 
 # Experiment settings

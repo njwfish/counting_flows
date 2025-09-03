@@ -1,0 +1,27 @@
+# Multimodal UViT Configuration
+_target_: architecture.uvit_multimodal.MultimodalUViT
+
+# Image parameters
+img_size: 28
+patch_size: 4
+in_chans: 1
+
+# Count parameters
+count_dim: ${dataset.data_dim}  # Will be overridden by dataset.data_dim
+num_count_patches: 4
+
+# Noise parameters (should match model.noise_dim)
+noise_dim: ${model.noise_dim}
+
+# Architecture parameters
+embed_dim: 64
+depth: 6
+num_heads: 4
+mlp_ratio: 4.0
+qkv_bias: false
+qk_scale: null
+mlp_time_embed: false
+num_classes: -1
+use_checkpoint: false
+conv: true
+skip: true

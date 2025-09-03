@@ -1,0 +1,10 @@
+# Multimodal Deconvolution Energy Score Loss Configuration
+_target_: models.energy_multimodal_deconv.MultimodalDeconvolutionEnergyScoreLoss
+
+# Architecture (will be injected from architecture config)
+architecture: ${architecture}
+
+# Energy score parameters
+noise_dim: 16
+m_samples: 8  # Smaller for faster testing
+lambda_energy: 1.0

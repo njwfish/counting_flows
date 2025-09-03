@@ -1,6 +1,9 @@
 import torch
 import os   
 import logging
+import hashlib
+import json
+from omegaconf import DictConfig, OmegaConf
 
 # Enable JIT compilation for better performance
 # TODO: We are using DDP 
@@ -30,3 +33,31 @@ def maybe_compile(func):
         except:
             pass
     return func
+
+
+def get_model_hash(cfg: DictConfig) -> str:
+    """
+    Get model hash excluding training and sampling parameters.
+    Only includes model-relevant configuration for consistent model identification.
+    """
+    # Create config hash (excluding training and sampling params)
+    config_copy = OmegaConf.to_container(cfg, resolve=True)
+    
+    # Remove entire training section (not model-relevant)
+    config_copy.pop('training', None)
+    
+    # Remove other non-model-relevant sections and parameters
+    excluded_params = [
+        # Hydra/experiment management
+        'hydra', 'defaults', 'logging',
+        # Runtime parameters  
+        'device', 'create_plots',
+        # Sampling parameters
+        'n_steps', 'n_samples'
+    ]
+    
+    for param in excluded_params:
+        config_copy.pop(param, None)
+    
+    config_str = json.dumps(config_copy, sort_keys=True)
+    return hashlib.md5(config_str.encode()).hexdigest()[:12]

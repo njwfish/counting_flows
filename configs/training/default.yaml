@@ -1,7 +1,7 @@
 # Default Training Configuration
 
 # Trainer instantiation
-_target_: training.FlowTrainer
+_target_: training.Trainer
 
 # Training parameters
 num_epochs: 5000

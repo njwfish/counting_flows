@@ -1,0 +1,38 @@
+# Multimodal Low-Rank Test Configuration
+defaults:
+  - bridge: multimodal
+  - model: energy_multimodal_deconv
+  - architecture: uvit_multimodal
+  - dataset: gaussian_deconv_mnist
+  - training: deconv
+  - slack_sampler: bessel
+  - _self_
+
+# Override architecture count_dim to match dataset
+architecture:
+  count_dim: ${dataset.data_dim}
+
+# Hydra configuration
+hydra:
+  job:
+    chdir: true
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+# Global settings
+device: cuda
+seed: 42
+train_split: 0.8
+
+# Experiment settings
+experiment:
+  name: "multimodal_lowrank_test"
+  version: "1.0"
+  description: "Testing multimodal UViT + energy loss on MNIST + Low-rank Gaussian mixture"
+
+# Logging
+logging:
+  level: INFO
+
+# Plotting
+create_plots: true

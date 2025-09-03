@@ -1,0 +1,10 @@
+# Multimodal Energy Score Loss Configuration
+_target_: models.energy_multimodal.MultimodalEnergyScoreLoss
+
+# Architecture (will be injected from architecture config)
+architecture: ${architecture}
+
+# Energy score parameters
+noise_dim: 128
+m_samples: 8  # Smaller for faster testing
+lambda_energy: 1.0

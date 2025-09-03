@@ -1,10 +1,9 @@
 """Dataset modules for counting flows"""
-
-from .poisson_mixture import PoissonMixtureDataset
+from .mnist import MNIST
 from .gaussian_mixture import GaussianMixtureDataset, LowRankGaussianMixtureDataset
 
 __all__ = [
-    'PoissonMixtureDataset',
+    'MNIST',
     'GaussianMixtureDataset', 
     'LowRankGaussianMixtureDataset',
 ]

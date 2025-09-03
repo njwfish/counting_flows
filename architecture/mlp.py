@@ -4,7 +4,7 @@ from .utils import concat_inputs
 from typing import Iterable
 
 class MLP(nn.Module):
-    def __init__(self, in_dims, hidden_dim, out_dim, layers=2):
+    def __init__(self, in_dims, hidden_dim, out_dim, layers=2, act_fn='identity'):
         super().__init__()
         if isinstance(in_dims, int):
             in_dims = [in_dims]
@@ -38,6 +38,13 @@ class MLP(nn.Module):
             self.layers.append(nn.SELU())
         self.layers.append(nn.Linear(hidden_dim, total_output_dim))
 
+        if act_fn == 'softplus':
+            self.act_fn = nn.Softplus()
+        elif act_fn == 'identity':
+            self.act_fn = nn.Identity()
+        else:
+            raise ValueError(f"Invalid activation function: {act_fn}")
+
     def forward(self, **kwargs): 
         """
         Forward pass with flexible keyword arguments.
@@ -59,4 +66,4 @@ class MLP(nn.Module):
             batch_size = x.shape[0]
             x = x.reshape(batch_size, *self.out_shape)
 
-        return x 
+        return self.act_fn(x)

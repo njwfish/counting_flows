@@ -1,0 +1,15 @@
+# MNIST + Gaussian Mixture Dataset Configuration
+_target_: datasets.mnist_mixture.MNISTGaussianMixtureDataset
+
+# Dataset parameters
+size: 50000  # Small for testing
+data_dim: 10
+value_range: 256
+min_value: 0
+k: 5  # Number of mixture components (maps to MNIST digits 0-4)
+
+# Gaussian mixture parameters
+seed: 42
+mean_scale: 5.0
+cov_scale: 2.0
+min_eigenvalue: 0.1
