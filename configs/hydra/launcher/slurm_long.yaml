@@ -1,0 +1,21 @@
+# Long-running Slurm Launcher Configuration
+_target_: hydra_plugins.hydra_submitit_launcher.submitit_launcher.SlurmLauncher
+
+# Slurm job parameters
+submitit_folder: ${hydra:runtime.output_dir}/.submitit/%j
+timeout_min: 480  # 8 hours
+cpus_per_task: 8
+gpus_per_node: 1
+tasks_per_node: 1
+mem_gb: 32
+nodes: 1
+partition: gpu
+
+# Job naming
+job_name: counting_flows_long
+
+# Additional Slurm parameters
+slurm_additional_parameters:
+  mail-type: FAIL,END
+  mail-user: ${oc.env:USER}@${oc.env:HOSTNAME}
+  qos: long 

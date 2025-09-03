@@ -118,6 +118,25 @@ bessel_kernel = cp.RawKernel(_preamble + _kernel_source, 'bessel_devroye')
 
 #=== Python wrapper ===
 def bessel(alpha, beta, d, n_samples=None, seed=None):
+    """
+    Devroye’s exact O(1)-time rejection sampler for
+    P[M=m | B1−D1=d] ∝ (αβ)^{m + d/2}/(m!(m+d)!) / I_d(2√(αβ)).
+    
+    Args:
+        alpha: [B] or [B,1] or [B,D]
+        beta:  [B] or [B,1] or [B,D]
+        d:     [B] or [B,1] or [B,D]
+        n_samples: int, optional
+        seed: int, optional
+        
+    Returns:
+        [B, n_samples] or [B] if n_samples is None
+    
+    TODO: the current iv implemnetation is correct but not necessarily stable for some regimes.
+
+    Once xsf implements the correct iv, we can use it here.
+
+    """
     if n_samples is None:
         out_shape = alpha.shape
         n_samples = 1

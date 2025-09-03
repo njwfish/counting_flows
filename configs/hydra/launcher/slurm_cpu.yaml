@@ -1,0 +1,19 @@
+# CPU-only Slurm Launcher Configuration
+_target_: hydra_plugins.hydra_submitit_launcher.submitit_launcher.SlurmLauncher
+
+# Slurm job parameters
+submitit_folder: ${hydra:runtime.output_dir}/.submitit/%j
+timeout_min: 30
+cpus_per_task: 16
+tasks_per_node: 1
+mem_gb: 64
+nodes: 1
+partition: cpu
+
+# Job naming
+job_name: counting_flows_cpu
+
+# Additional Slurm parameters
+slurm_additional_parameters:
+  mail-type: FAIL,END
+  mail-user: ${oc.env:USER}@${oc.env:HOSTNAME} 

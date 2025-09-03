@@ -1,0 +1,18 @@
+_target_: hydra_plugins.hydra_submitit_launcher.submitit_launcher.SlurmLauncher
+
+# Slurm configuration
+partition: ou_bcs_low
+gpus_per_node: 1
+cpus_per_task: 8
+mem_gb: 32
+timeout_min: 720
+
+# Submitit settings
+submitit_folder: ${hydra.sweep.dir}/.submitit/%j
+array_parallelism: 8  # Maximum number of concurrent jobs
+nodes: 1
+tasks_per_node: 2
+max_num_timeout: 3
+additional_parameters:
+  mail-type: END,FAIL
+  mail-user: nfishman@g.harvard.edu  # Your email for notifications 

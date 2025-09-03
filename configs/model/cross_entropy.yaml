@@ -1,0 +1,7 @@
+# Cross Entropy Loss Model Configuration
+_target_: models.cross_entropy.CrossEntropyLoss
+
+# Model parameters (simple - just architecture)
+architecture: ${architecture}  # MLP architecture 
+min_value: ${dataset.min_value}
+value_range: ${dataset.value_range}

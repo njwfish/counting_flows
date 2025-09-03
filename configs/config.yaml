@@ -1,6 +1,9 @@
 defaults:
   - bridge: skellam
   - model: energy_score
+  - architecture: mlp
+  - architecture/in_dims: with_noise
+  - architecture/out_dim: scalar
   - dataset: poisson_mixture
   - training: default
   - slack_sampler: bessel
@@ -16,8 +19,8 @@ hydra:
 # Global settings
 device: cuda
 seed: 42
-data_dim: 4
-n_steps: 30
+n_steps: 10
+train_split: 0.8  # 80% train, 20% eval
 
 # Experiment settings
 experiment:

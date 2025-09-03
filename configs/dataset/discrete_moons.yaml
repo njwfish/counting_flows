@@ -1,0 +1,14 @@
+# Discrete Moons Dataset Configuration
+_target_: datasets.discrete_moons.DiscreteMoonsDataset
+
+# Dataset parameters
+size: 50000  # total samples in dataset (pre-sampled for speed)
+value_range: 196  # discrete vocabulary size (0 to 127)
+min_value: 0
+
+# Scaling parameters for integerization  
+scale: 30.0     # scaling factor: x * scale + offset
+offset: 80.0    # offset before discretization
+noise: 0.1     # noise level for make_moons 
+data_dim: 2
+flip_moons: false

@@ -1,0 +1,35 @@
+defaults:
+  - bridge: cfm
+  - model: mse
+  - architecture: mlp
+  - architecture/in_dims: standard
+  - architecture/out_dim: scalar
+  - dataset: poisson_mixture
+  - training: default
+  - _self_
+
+# Hydra configuration
+hydra:
+  job:
+    chdir: true
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+# Global settings
+device: cuda
+seed: 42
+n_steps: 10
+train_split: 0.8
+
+# Experiment settings
+experiment:
+  name: "counting_flows_experiment"
+  version: "1.0"
+  description: "Count-based flow matching with GPU bridges"
+
+# Logging
+logging:
+  level: INFO
+
+# Plotting (handled automatically by main.py)
+create_plots: true 

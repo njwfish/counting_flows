@@ -1,0 +1,9 @@
+# Attention Architecture Configuration
+_target_: architecture.attention.AttentionArch
+
+hidden_dim: 128
+
+# Transformer parameters
+num_heads: 4      # number of attention heads
+num_layers: 2     # number of transformer layers
+dropout: 0.1      # dropout rate

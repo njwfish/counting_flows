@@ -1,0 +1,4 @@
+# Energy score inputs: [x_t, t, noise]
+- ${dataset.data_dim}
+- 1
+- ${model.noise_dim} 

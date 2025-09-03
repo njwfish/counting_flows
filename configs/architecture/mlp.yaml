@@ -1,0 +1,6 @@
+# MLP Architecture Configuration - Flexible with Input/Output Specs
+_target_: architecture.mlp.MLP
+
+# Architecture parameters
+hidden_dim: 128
+layers: 4

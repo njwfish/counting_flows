@@ -1,8 +1,7 @@
 import numpy as np
-import torch
-from .scheduling import make_time_spacing_schedule, make_lambda_schedule
-# from ...sampling.hypergeom import hypergeometric
-
+from typing import Callable
+from .scheduling import make_weight_schedule
+from .utils import dlpack_backend
 
 class SkellamBridge:
     """
@@ -13,170 +12,167 @@ class SkellamBridge:
     def __init__(
         self,
         n_steps: int,
-        lam0: float = 8.0,
-        lam1: float = 8.0,
-        schedule_type: str = "constant",
-        time_schedule: str = "uniform",
-        homogeneous_time: bool = True,
+        slack_sampler: Callable,
+        delta: bool = False,
+        schedule_type: str = "linear",
+        homogeneous_time: bool = False,
+        backend: str = "torch",
+        device: int = 0,
         **schedule_kwargs,
     ):
-        self.n_steps = n_steps
-        self.lam0 = lam0
-        self.lam1 = lam1
-        self.schedule_type = schedule_type
+        self.device           = device
+        self.n_steps          = n_steps
+        self.slack_sampler    = slack_sampler
+        self.schedule_type    = schedule_type
+        self.delta            = delta
+        # this is really only for comparison with the constrained bridge
+        # there is no need to sample homogeneous time points in this bridge
         self.homogeneous_time = homogeneous_time
-        self.sched_kwargs = schedule_kwargs
-        
-        self.time_points = make_time_spacing_schedule(n_steps, time_schedule, **schedule_kwargs)
+        self.backend          = backend
 
-        self.lam_p, self.lam_m, self.Λp, self.Λm = make_lambda_schedule(
-            self.time_points, self.lam0, self.lam1, schedule_type
+        self.time_points      = np.linspace(0, 1, n_steps + 1)
+        self.weights          = make_weight_schedule(
+            n_steps, schedule_type, **schedule_kwargs
         )
-        self.Λ_tot1 = self.Λp[-1] + self.Λm[-1]
 
+    def __call__(self, x_0, x_1, t_target=None):
+        x_0, x_1 = dlpack_backend(x_0, x_1, backend='numpy', dtype="int32")
 
-    def _sample_N_B1(self, diff: np.ndarray, Lambda_p: float, Lambda_m: float):
-        """
-        diff = x1 - x0   (shape [B, d])
-        Lambda_p, Lambda_m: Final cumulative integrals from lambda schedule (scalars)
-        Returns N (total jumps) and B1 (birth count at t=1).
-        Uses Poisson for total jumps with lambda_star from schedule.
-        """
-        B, d = diff.shape
-        lambda_star = 2.0 * np.sqrt(Lambda_p * Lambda_m)
-        lambda_star = np.broadcast_to(lambda_star, diff.shape)
-        M = np.random.poisson(lambda_star).astype(np.int64)
-        N = np.abs(diff) + 2 * M
-        B1 = (N + diff) // 2
-        return N, M, B1
+        b, d = x_0.shape
 
-    def _sample_time(self):
-        """Sample time point from pre-computed schedule"""
-        valid_idx = np.random.randint(1, len(self.time_points) - 1)
-        t = self.time_points[valid_idx]
-        t_idx = valid_idx
-        return t, t_idx
+        diff = (x_1 - x_0)
+        M = self.slack_sampler(diff)
 
-    def __call__(self, batch, t_target=None):
-        if isinstance(batch, list):
-            x0 = np.stack([b["x0"] for b in batch])
-            x1 = np.stack([b["x1"] for b in batch])
-            z = np.stack([b["z"]  for b in batch])
-        else:
-            x0 = batch["x0"]
-            x1 = batch["x1"]
-            z = batch["z"]
-        
-        B, d = x0.shape
-
-        diff = (x1 - x0)
-        N, M, B1 = self._sample_N_B1(diff, self.Λp[-1], self.Λm[-1])
+        N_1 = np.abs(diff) + 2 * M
+        B_1 = (N_1 + diff) // 2
+        # assert np.all((N_1 + diff) % 2 == 0), "N_1 + diff should be even"
 
         if t_target is not None:
+            # find closest time point
             time_diffs = np.abs(self.time_points - t_target)
-            k_idx_scalar = np.argmin(time_diffs).item()
-            k_idx = np.full((B,), k_idx_scalar)
+            k = np.argmin(time_diffs)
+            k = np.broadcast_to(k, (b,))
+
         elif self.homogeneous_time:
-            k_idx_scalar = np.random.randint(0, self.n_steps + 1)
-            k_idx = np.full((B,), k_idx_scalar)
+            k = np.random.randint(1, self.n_steps + 1)
+            k = np.broadcast_to(k, (b,))
         else:
-            k_idx = np.random.randint(1, self.n_steps + 1, (B,))
+            k = np.random.randint(1, self.n_steps + 1, (b,))
             
-        t     = self.time_points[k_idx]
-        w_t   = (self.Λp[k_idx] + self.Λm[k_idx]) / self.Λ_tot1
+        t     = self.time_points[k].reshape(-1, 1)
+        w_t   = self.weights[k]
         
-        N_t = np.random.binomial(N, np.expand_dims(w_t, -1))
+        N_t = np.random.binomial(N_1, np.expand_dims(w_t, -1)).astype(np.int32)
+        
+        # need to gaurd against zero nsample
+        non_zero = N_t > 0
+        B_t = np.zeros_like(B_1)
+        B_t[non_zero] = np.random.hypergeometric(
+            ngood=B_1[non_zero],
+            nbad=N_1[non_zero] - B_1[non_zero],
+            nsample=N_t[non_zero]
+        ).astype(np.int32)
 
-        B_t = hypergeometric(
-            total_count=N,
-            success_count=B1,
-            num_draws=N_t
-        )
+        x_t = x_1 - 2 * (B_1 - B_t) + (N_1 - N_t)
 
-        x_t = x1 - 2 * (B1 - B_t) + (N - N_t)
+        diff_t = np.abs(x_t - x_0)
+        M_t    = (N_t - diff_t) // 2
+        # assert np.all((N_t - diff_t) % 2 == 0), "N_t - diff_t should be even"
 
-        diff_t = np.abs(x_t - x0)
-        M_t    = ((N_t - diff_t) >> 1)
-
-        return {
-            "x0"  : x0,
-            "x1"  : x1,
-            "x_t" : x_t,
-            "t"   : t,
-            "z"   : z,
-            "M_t" : M_t, 
+        x_t, M_t, t, x_0 = dlpack_backend(x_t, M_t, t, x_0, backend=self.backend, dtype="float32", device=self.device)
+        out_dict = {
+            "inputs": {
+                "x_t": x_t,
+                "t": t,
+            },
+            "output": x_0 - x_t if self.delta else x_0
         }
+        if not self.slack_sampler.markov:
+            out_dict["inputs"]["M_t"] = M_t
+        return out_dict
     
-    def reverse_sampler(
+    def sampler(
         self,
-        x1:  np.ndarray,
-        z:   np.ndarray,
+        x_1:  np.ndarray,
+        z:   dict,
         model,
         return_trajectory: bool = False,
-        return_x_hat:     bool = False,
-        return_M:         bool = False,
-        x0 = None,
+        return_x_hat:      bool = False,
+        return_M:          bool = False,
+        guidance_x_0:      np.ndarray = None,
+        guidance_schedule: np.ndarray = None,
     ):
-        x_t     = x1.astype(np.int64)
-        B, d    = x_t.shape
+        b, d    = x_1.shape
+        x_1 = x_t = dlpack_backend(x_1.round(), backend='numpy', dtype="int32")
 
-        w  = (self.Λp + self.Λm) / self.Λ_tot1
+        if guidance_x_0 is not None:
+            guidance_x_0 = guidance_x_0.round().astype(np.int32)
 
-        lambda_star = 2. * np.sqrt(self.Λp[-1] * self.Λm[-1])
-        lambda_star = np.broadcast_to(lambda_star, x_t.shape)
-        M_t    = np.random.poisson(lambda_star).astype(np.int64)
+        def sample_step(k, x_t, M_t=None, **z):
+            if M_t is None:
+                if not self.slack_sampler.markov:
+                    M_t = self.slack_sampler(x_t)
 
-        t1          = np.ones_like(x_t[:, :1])
-        x_t_tensor = torch.from_numpy(x_t).float()
-        M_t_tensor = torch.from_numpy(M_t).float()
-        z_tensor = torch.from_numpy(z).float()
-        t1_tensor = torch.from_numpy(t1).float()
-        
-        x0_hat_t    = model.sample(x_t_tensor, M_t_tensor, z_tensor, t1_tensor).cpu().numpy().round().astype(np.int64)
-        diff        = x_t - x0_hat_t
-        N_t         = np.abs(diff) + 2 * M_t
-        B_t         = (N_t + diff) >> 1
+            t = np.broadcast_to(self.time_points[k], (b, 1))
+            
+            if not self.slack_sampler.markov:
+                x_t_dl, M_t_dl, t_dl = dlpack_backend(x_t, M_t, t, backend=self.backend, dtype="float32", device=self.device)
+                model_out = model.sample(x_t=x_t_dl, M_t=M_t_dl, t=t_dl, **z)
+            else:
+                x_t_dl, t_dl = dlpack_backend(x_t, t, backend=self.backend, dtype="float32", device=self.device)
+                model_out = model.sample(x_t=x_t_dl, t=t_dl, **z)
+            x0_hat_t = dlpack_backend(model_out, backend='numpy', dtype="float32") + x_t if self.delta else dlpack_backend(model_out, backend='numpy', dtype="float32")
 
-        traj, xhat_traj, M_traj = [], [], []
+            if guidance_x_0 is not None:
+                x0_hat_t =  guidance_schedule[k] * guidance_x_0 + (1 - guidance_schedule[k]) * x0_hat_t
 
-        for k in range(self.n_steps, 0, -1):
-            ρ = (w[k-1] / w[k]).item()
+            x0_hat_t = x0_hat_t.round().astype(np.int32)
+            diff = x_t - x0_hat_t
 
-            t_tensor  = np.zeros_like(x_t[:, :1]) + self.time_points[k-1]
-            x_t_tensor = torch.from_numpy(x_t).float()
-            M_t_tensor = torch.from_numpy(M_t).float()
-            z_tensor = torch.from_numpy(z).float()
-            t_tensor = torch.from_numpy(t_tensor).float()
+            # the markov sampler requires the diff to sample M_t
+            if M_t is None:
+                M_t = self.slack_sampler(diff)
 
-            x0_hat_t = model.sample(x_t_tensor, M_t_tensor, z_tensor, t_tensor).cpu().numpy().round().astype(np.int64)
+            N_t = np.abs(diff) + 2 * M_t
+            B_t = (N_t + diff) // 2
+            # post correction should be even
+            # assert np.all((N_t + diff) % 2 == 0), "N_t + diff should be even"
 
-            diff  = x_t - x0_hat_t
-            N_t   = np.abs(diff) + 2 * M_t
-            B_t   = (N_t + diff) >> 1
-
+            ρ = (self.weights[k-1] / self.weights[k])
             non_zero = N_t > 0
             N_s = np.zeros_like(N_t)
             N_s[non_zero] = np.random.binomial(N_t[non_zero], ρ)
 
+            non_zero = N_s > 0
             B_s = np.zeros_like(B_t)
-            B_s[non_zero] = hypergeometric(
-                total_count   = N_t[non_zero],
-                success_count = B_t[non_zero],
-                num_draws     = N_s[non_zero]
+            B_s[non_zero] = np.random.hypergeometric(
+                ngood   = B_t[non_zero],
+                nbad    = N_t[non_zero] - B_t[non_zero],
+                nsample = N_s[non_zero]
             )
 
             x_s = x_t - 2 * (B_t - B_s) + (N_t - N_s)
             diff_s = np.abs(x_s - x0_hat_t)
-            M_s = (N_s - diff_s) // 2  
+            # since we corrected above this should be fine
+            M_s = (N_s - diff_s) // 2 
+            # assert np.all((N_s - diff_s) % 2 == 0), "N_s - diff_s should be even"
 
-            x_t, M_t = x_s, M_s
+            return x_s, M_s, x0_hat_t
+        
+        
+        x_t, M_t, x0_hat_t = sample_step(self.n_steps, x_t, None, **z)
+
+        traj, xhat_traj, M_traj = [x_t], [x0_hat_t], [M_t]
+        for k in range(self.n_steps - 1, 0, -1):
+            
+            x_t, M_t, x0_hat_t = sample_step(k, x_t, M_t, **z)
 
             if return_trajectory: traj.append(x_t)
             if return_x_hat:     xhat_traj.append(x0_hat_t)
             if return_M:         M_traj.append(M_t)
 
         outs = [x_t]
-        if return_trajectory: outs.append(traj)
-        if return_x_hat:     outs.append(xhat_traj)
-        if return_M:         outs.append(M_traj)
-        return tuple(outs) if len(outs) > 1 else x_t 
+        if return_trajectory: outs.append(np.stack(traj))
+        if return_x_hat:      outs.append(np.stack(xhat_traj))
+        if return_M:          outs.append(np.stack(M_traj))
+        return dlpack_backend(*outs, backend=self.backend, dtype="float32") if len(outs) > 1 else dlpack_backend(x_t, backend=self.backend, dtype="float32") 

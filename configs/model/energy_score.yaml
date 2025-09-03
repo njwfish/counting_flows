@@ -1,14 +1,10 @@
-# Energy Score Model Configuration
-_target_: models.energy.EnergyScorePosterior
+# Energy Score Loss Configuration
+_target_: models.energy.EnergyScoreLoss
 
-# Model architecture
-x_dim: ${data_dim}
-context_dim: 0  # No conditioning for simplified approach
-hidden: 64
-noise_dim: 16
+# Architecture (use MLP by default)
+architecture: ${architecture}
 
 # Energy score parameters
-sigma: 1.0
+noise_dim: 100
 m_samples: 16
 lambda_energy: 1.0
-markov_bridge: ${bridge.slack_sampler.markov}

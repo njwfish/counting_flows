@@ -4,7 +4,8 @@ _target_: bridges.cupy.skellam.SkellamBridge
 # Bridge parameters
 n_steps: ${n_steps}
 schedule_type: "linear"
-homogeneous_time: true
+homogeneous_time: false
 
 # Slack sampler configuration
 slack_sampler: ${slack_sampler}
+delta: false

@@ -9,3 +9,4 @@ mh_sweeps: 1000
 
 # M-sampler configuration
 slack_sampler: ${slack_sampler}
+delta: true

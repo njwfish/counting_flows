@@ -1,276 +1,400 @@
-# Counting Flows: Count-based Flow Matching with GPU Bridges
+# Counting Flow Matching Framework
 
-A clean, Hydra-based implementation of count-based flow matching using GPU-accelerated bridges for efficient training and sampling.
+A modular, Hydra-based framework for **count-based flow matching** with specialized support for discrete count data. Features novel Skellam bridges, energy score losses, and flexible architectures, with additional baseline methods (CFM, DFM) for comparison.
 
-## Features
+## ✨ Key Features
 
-- **GPU-Accelerated Bridges**: CuPy-based bridges for fast diffusion operations
-- **Simplified Datasets**: Focus on Poisson mixture models with clean conditioning
-- **Hydra Configuration**: Structured, reproducible configuration management
-- **Smart Checkpointing**: Automatic resumption based on config hashes (excluding training params)
-- **Clean Training Loop**: Streamlined training with proper GPU integration
-- **Modular Design**: Easy to extend and customize
+- **🔢 Count-Based Flow Matching**: Novel Skellam birth-death bridges for non-negative integer count data
+- **⚡ GPU-Accelerated Bridges**: CuPy-based implementations for fast count diffusion processes  
+- **📊 Distributional Losses**: Energy Score and CRPS losses designed for count distributions
+- **🧠 Flexible Architectures**: MLP and attention-based architectures with configurable input/output dimensions
+- **📈 Specialized Datasets**: Poisson mixtures and count-based transformations
+- **🔄 Baseline Methods**: CFM and Discrete Flow Matching for comparison and ablation studies
+- **⚙️ Modular Design**: Clean, composable components that work together seamlessly
+- **🔧 Hydra Configuration**: Structured, reproducible configuration management
+- **💾 Smart Checkpointing**: Automatic training resumption and model saving
+- **🎯 Easy Extensibility**: Add new components with minimal code changes
 
-## Installation
+## 📦 Installation
 
-1. Install dependencies:
 ```bash
+# Clone the repository
+git clone https://github.com/njwfish/counting_flows.git
+cd counting_flows
+
+# Install dependencies
 pip install -r requirements.txt
+pip install cupy-cuda12x  # For CUDA 12.x
 ```
 
-2. Ensure CuPy is installed for your CUDA version:
+## 🔬 Novel Contributions
+
+This framework introduces **count-based flow matching**, a new paradigm for modeling discrete count data:
+
+- **🎯 Specialized for Counts**: Unlike standard flow matching that treats discrete data as continuous or categorical, our approach respects the non-negative integer nature of count data
+- **⚡ Skellam Bridges**: Novel use of birth-death processes with time-varying rates for natural count transformations
+- **📊 Distributional Modeling**: Energy Score and CRPS losses that capture uncertainty in count predictions, not just point estimates
+- **🧮 GPU Acceleration**: CuPy-based implementations for efficient count diffusion on GPUs
+- **🎚️ Constrained Generation**: Mean-constrained bridges for controlled count generation
+
+**Why Count Flows Matter**: Count data appears everywhere (word frequencies, neural spike trains, reaction counts, etc.) but existing flow methods either ignore the discrete constraint or treat counts as arbitrary categories. Count flows naturally handle the structure of non-negative integers while modeling full distributions.
+
+## 🚀 Quick Start
+
+### Basic Usage
+
 ```bash
-# For CUDA 12.x
-pip install cupy-cuda12x
+# Train with default configuration (count-based flow matching)
+python main.py
 
-# For CUDA 11.x  
-pip install cupy-cuda11x
+# Train with attention architecture for complex count dependencies
+python main.py architecture=attention_discrete
+
+# Quick experimentation with different count parameters
+python main.py data_dim=8 n_steps=50 training.num_epochs=200
+
+# Baseline methods for comparison
+python main.py bridge=cfm --config-name=cfm_config     # Continuous Flow Matching
+python main.py --config-name=dfm_config dataset=discrete_moons  # Discrete Flow Matching
 ```
 
-## Quick Start
-
-### Basic Training
+### Configuration Examples
 
 ```bash
-# Run with default configuration
-python run.py
+# Count-based flow matching (main contribution)
+python main.py bridge=skellam model=energy_score      # Standard count flows
+python main.py bridge=constrained model=energy_score  # Constrained count flows
 
-# Quick test with reduced parameters
-python run.py --config-name=experiment_quick
+# Different architectures for count data
+python main.py architecture=mlp               # Standard MLP (fast)
+python main.py architecture=attention_discrete # Transformer-based attention (complex dependencies)
 
-# Override specific parameters
-python run.py training.num_iterations=25000 data_dim=20
-
-# Use different bridge type
-python run.py bridge=constrained
+# Baseline comparison methods
+python main.py bridge=cfm model=mse              # Continuous Flow Matching
+python main.py bridge=dfm model=cross_entropy    # Discrete Flow Matching
 ```
 
-### Checkpoint System
+## 🏗️ Architecture Overview
 
-The system automatically manages checkpoints based on configuration hashes:
+The framework is built around four core components that can be mixed and matched:
 
-- **Config Hashing**: Creates unique hashes from model/bridge/dataset configs (excluding training parameters)
-- **Automatic Resumption**: Automatically loads and resumes from existing checkpoints
-- **Smart Detection**: Skips training if model appears fully trained
-- **Minimal Changes**: Only training parameters (epochs, learning rate, etc.) can be changed for resumption
-
-Example workflow:
-```bash
-# Initial training
-python run.py training.num_epochs=100
-
-# Resume with more epochs (uses same checkpoint)
-python run.py training.num_epochs=200
-
-# Different model config (creates new checkpoint)
-python run.py model.hidden_dim=256 training.num_epochs=100
+```
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│   Dataset   │ -> │   Bridge    │ -> │    Model    │ -> │  Training   │
+│             │    │             │    │             │    │             │
+│ • Poisson   │    │ • CFM       │    │ • MSE       │    │ • Adam      │
+│ • Discrete  │    │ • DFM       │    │ • Energy    │    │ • Logging   │
+│   Moons     │    │ • Skellam   │    │ • CRPS      │    │ • Checkpts  │
+│             │    │             │    │ • CrossEnt  │    │             │
+└─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
+                                             │
+                                      ┌─────────────┐
+                                      │    Arch     │
+                                      │             │
+                                      │ • MLP       │
+                                      │ • Attention │
+                                      └─────────────┘
 ```
 
-Each model configuration gets its own output directory at `outputs/<hash>/` containing:
-- `model.pt` - Model checkpoint
-- `plots/` - Visualization plots including training loss, bridge marginals, and generated samples
+## 📚 Components
 
-## Configuration Structure
+### 🌊 Bridges (`bridges/`)
 
-The system uses Hydra for configuration management. Configs are organized as:
+**Count-Based Flows (Main Contribution):**
+- **Skellam** (`bridges/cupy/skellam.py`): Novel Skellam birth-death processes for count data
+- **Constrained Skellam** (`bridges/cupy/constrained.py`): Mean-constrained count flows
+
+**Baseline Methods:**
+- **CFM** (`bridges/baselines/cfm.py`): Continuous Flow Matching with optimal transport
+- **DFM** (`bridges/baselines/dfm.py`): Discrete Flow Matching with zero masking
+
+### 🧠 Architectures (`architecture/`)
+
+**MLP** (`architecture/mlp.py`):
+- Flexible input/output dimensions via lists
+- Supports arbitrary keyword arguments
+- Automatic input concatenation
+
+**Attention** (`architecture/attention.py`):  
+- BERT-like transformer architecture
+- Intelligent input handling (splits vs broadcasts)
+- Learnable position embeddings
+- Multi-head self-attention
+
+### 🎯 Models (`models/`)
+
+**Count-Based Models (Main Contribution):**
+- **Energy Score** (`models/energy.py`): Distributional energy score with m-sample approximation for count distributions
+- **CRPS** (`models/crps.py`): Continuous Ranked Probability Score for distributional prediction
+
+**Baseline Models:**
+- **MSE** (`models/mse.py`): Simple mean squared error loss for continuous data
+- **Cross-Entropy** (`models/cross_entropy.py`): For discrete flow matching with categorical distributions
+
+### 📊 Datasets (`datasets/`)
+
+**Count Data (Main Focus):**
+- **Poisson Mixture** (`datasets/poisson_mixture.py`): Mixture of Poisson distributions for count data with pre-sampling for efficiency and configurable mixture components
+
+**Baseline Datasets:**
+- **Discrete Moons** (`datasets/discrete_moons.py`): 8-gaussians → 2-moons discrete flow task, integerized using consistent scaling
+
+## ⚙️ Configuration System
+
+### Directory Structure
 
 ```
 configs/
-├── config.yaml           # Main config with defaults
+├── config.yaml              # Default continuous flow config
+├── dfm_config.yaml          # Discrete flow matching config  
+├── architecture/
+│   ├── mlp.yaml             # Standard MLP
+│   ├── discrete_attention.yaml # Attention for discrete flows
+│   └── attention.yaml       # General attention config
 ├── bridge/
-│   ├── skellam.yaml      # Standard Skellam bridge
-│   └── constrained.yaml # Constrained bridge
+│   ├── cfm.yaml            # Continuous Flow Matching
+│   ├── dfm.yaml            # Discrete Flow Matching
+│   └── skellam.yaml        # Skellam bridge
 ├── model/
-│   └── energy_score.yaml # Energy score model
+│   ├── mse.yaml            # MSE loss
+│   ├── energy_score.yaml  # Energy score loss
+│   └── cross_entropy.yaml # Cross-entropy loss
 ├── dataset/
-│   └── poisson_mixture.yaml # Poisson mixture dataset
+│   ├── poisson_mixture.yaml # Poisson mixtures
+│   └── discrete_moons.yaml  # 8-gaussians→2-moons
 └── training/
-    └── default.yaml      # Training parameters
+    └── default.yaml         # Training hyperparameters
 ```
 
-### Example Configurations
+### Key Configuration Patterns
 
-**Quick Development:**
-```bash
-python run.py --config-name=experiment_quick
-```
-
-**Production Training:**
-```bash
-python run.py training.num_iterations=100000 training.save_every=5000
-```
-
-**Different Conditioning:**
-```bash
-python run.py dataset.condition_type=additive dataset.multiplier_range=[0.2,3.0]
-```
-
-## System Components
-
-### 1. GPU Bridges (`bridges/cupy/`)
-
-Fast CuPy-based implementations:
-- `SkellamBridge`: Standard Skellam birth-death bridge
-- `ConstrainedSkellamBridge`: Bridge with constraints
-- Automatic GPU memory management and dlpack conversion
-
-### 2. Datasets (`datasets.py`)
-
-Simplified Poisson mixture models:
-- **Multiplier conditioning**: Target = base_rate * multiplier
-- **Additive conditioning**: Target = base_rate + additive
-- **Mixture conditioning**: Target = mixture of different rates
-
-### 3. Models (`models.py`)
-
-Energy score posterior for count prediction:
-- Distributional diffusion with energy score
-- m-sample approximation for stable training
-- Configurable architecture
-
-### 4. Training (`training.py`)
-
-Clean training loop:
-- GPU bridge integration
-- Gradient clipping and checkpointing
-- Structured logging and progress tracking
-
-## Configuration Examples
-
-### Custom Bridge Settings
+**Flexible Input/Output Dimensions:**
 ```yaml
-# configs/bridge/custom.yaml
-_target_: counting_flows.bridges.cupy.skellam.SkellamBridge
-n_steps: 100
-schedule_type: "cosine"
-m_sampler:
-  _target_: counting_flows.bridges.cupy.m_samplers.PoissonM
-  lam_p: 10.0
-  lam_m: 10.0
+# MLP with list inputs/outputs
+in_dims: 
+  - ${data_dim}  # x_t
+  - 1            # time
+out_dim:
+  - ${data_dim}  # output dimensions
+  - 128          # vocab size (for discrete)
 ```
 
-### Custom Dataset
+**Component Composition:**
 ```yaml
-# configs/dataset/custom.yaml
-_target_: counting_flows.datasets.PoissonMixtureDataset
-size: 50000
-d: 15
-batch_size: 128
-condition_type: "multiplier"
-multiplier_range: [0.1, 5.0]
+defaults:
+  - bridge: dfm                    # Choose bridge type
+  - model: cross_entropy          # Choose loss function
+  - architecture: discrete_attention # Choose architecture
+  - dataset: discrete_moons       # Choose dataset
 ```
 
-### Custom Training
+## 🔄 Flow Types Explained
+
+### Count-Based Flow Matching (Main Contribution)
+
+**Novel approach** for count data using birth-death processes with Skellam bridges:
+- **Innovation**: Specialized jump processes for non-negative integer count data
+- **Bridge**: `skellam` - Stochastic birth-death processes with time-varying rates  
+- **Models**: `energy_score`, `crps` - Distributional losses designed for count distributions
+- **Data**: Non-negative integer counts (e.g., word frequencies, spike counts, reaction counts)
+- **Advantages**: Naturally handles discrete, non-negative constraints and distributional uncertainty
+
+```bash
+# Standard count-based flow matching
+python main.py bridge=skellam model=energy_score
+
+# With mean constraints for controlled generation
+python main.py bridge=constrained model=energy_score
+```
+
+### Baseline Comparison Methods
+
+**Continuous Flow Matching (CFM)** - Standard approach for continuous data:
+- **Bridge**: `cfm` - Optimal transport between distributions
+- **Models**: `mse`, `energy_score` - Continuous loss functions  
+- **Data**: Real-valued vectors
+
+```bash
+python main.py bridge=cfm model=energy_score --config-name=cfm_config
+```
+
+**Discrete Flow Matching (DFM)** - Categorical approach for discrete data:
+- **Bridge**: `dfm` - Zero masking with proportional interpolation
+- **Models**: `cross_entropy` - Categorical loss function
+- **Data**: Integer-valued vectors (vocabulary-based)
+
+```bash
+python main.py --config-name=dfm_config dataset=discrete_moons
+```
+
+## 🛠️ Extending the Framework
+
+### Adding a New Bridge
+
+1. **Implement bridge** in `bridges/`:
+```python
+class MyBridge:
+    def __call__(self, x_0, x_1, t_target=None):
+        # Bridge logic here
+        return {"inputs": {...}, "output": ...}
+    
+    def sampler(self, x_1, z, model, **kwargs):
+        # Sampling logic here
+        return samples
+```
+
+2. **Add configuration** in `configs/bridge/my_bridge.yaml`:
 ```yaml
-# configs/training/long.yaml
-num_iterations: 200000
-learning_rate: 1e-3
-print_interval: 5000
-save_every: 10000
-grad_clip:
-  enabled: true
-  max_norm: 0.5
+_target_: bridges.my_bridge.MyBridge
+param1: value1
+param2: value2
 ```
 
-## Usage Patterns
+### Adding a New Model
 
-### 1. Standard Training
+1. **Implement model** in `models/`:
 ```python
-import hydra
-from counting_flows.main_hydra import main
-
-# Run with config
-@hydra.main(config_path="configs", config_name="config")
-def train(cfg):
-    main(cfg)
+class MyModel(nn.Module):
+    def __init__(self, architecture):
+        super().__init__()
+        self.architecture = architecture
+    
+    def forward(self, inputs):
+        return self.architecture(**inputs)
+    
+    def sample(self, **kwargs):
+        return self.forward(kwargs)
+    
+    def loss(self, target, inputs):
+        # Loss computation here
+        return loss
 ```
 
-### 2. Programmatic Usage
+2. **Add configuration** in `configs/model/my_model.yaml`:
+```yaml
+_target_: models.my_model.MyModel
+architecture: ${architecture}
+```
+
+### Adding a New Architecture
+
+1. **Implement architecture** in `architecture/`:
 ```python
-from counting_flows import CountFlowTrainer, create_dataloader
-import hydra
-
-# Load configurations
-bridge = hydra.utils.instantiate(bridge_config)
-model = hydra.utils.instantiate(model_config)
-dataloader, dataset = create_dataloader(dataset_config)
-
-# Create and run trainer
-trainer = create_trainer_from_config(model, bridge, training_config)
-trained_model, losses = trainer.train(dataloader, num_iterations=50000)
+class MyArch(nn.Module):
+    def __init__(self, in_dims, hidden_dim, out_dim):
+        # Support flexible list dimensions
+        super().__init__()
+        # Implementation here
+    
+    def forward(self, **kwargs):
+        # Handle arbitrary keyword inputs
+        return output
 ```
 
-### 3. Custom Experiments
-```python
-# Override configurations dynamically
-cfg.training.num_iterations = 100000
-cfg.dataset.d = 50
-cfg.bridge.n_steps = 200
-
-# Run training
-main(cfg)
+2. **Add configuration** in `configs/architecture/my_arch.yaml`:
+```yaml
+_target_: architecture.my_arch.MyArch
+in_dims: [${data_dim}, 1]
+out_dim: ${data_dim}
+hidden_dim: 64
 ```
 
-## GPU Memory Management
+## 📋 Example Workflows
 
-The system handles GPU memory efficiently:
-- Automatic dlpack conversion between CuPy and PyTorch
-- Minimal GPU memory copying
-- Bridge operations stay on GPU
-- Model operations on specified device
+### Count-Based Flow Matching Experiments (Main Focus)
 
-## Monitoring and Logging
+```bash
+# Standard count flow experiment
+python main.py bridge=skellam model=energy_score data_dim=8 n_steps=50
 
-- Structured logging with configurable levels
-- Automatic checkpoint saving
-- Loss tracking and statistics
-- Hydra output directory management
+# Count flows with attention for complex dependencies  
+python main.py bridge=skellam model=energy_score architecture=attention_discrete
 
-## Extending the System
+# Constrained count generation with mean control
+python main.py bridge=constrained model=energy_score data_dim=4
 
-### Adding New Bridges
-1. Implement bridge in `bridges/cupy/`
-2. Add configuration in `configs/bridge/`
-3. Ensure dlpack compatibility
+# Ablation study: different count-based models
+python main.py model=energy_score bridge=skellam   # Distributional energy score
+python main.py model=crps bridge=skellam          # CRPS for count distributions
+```
 
-### Adding New Datasets
-1. Extend `PoissonMixtureDataset` or create new class
-2. Add configuration in `configs/dataset/`
-3. Ensure GPU bridge compatibility
+### Architecture Comparison for Count Data
 
-### Adding New Models
-1. Implement model in `models.py`
-2. Add configuration in `configs/model/`
-3. Ensure energy score interface compatibility
+```bash
+# Compare architectures on count data
+python main.py model=energy_score architecture=mlp               # Fast MLP
+python main.py model=energy_score architecture=attention_discrete # Complex dependencies
+```
 
-## Troubleshooting
+### Baseline Comparison Studies
 
-**CuPy Issues:**
-- Ensure correct CUDA version compatibility
-- Check GPU memory availability
-- Verify dlpack support
+```bash
+# Compare flow types on similar data
+python main.py bridge=skellam model=energy_score dataset=poisson_mixture     # Count-based (main)
+python main.py bridge=cfm model=energy_score dataset=poisson_mixture         # Continuous baseline
+python main.py --config-name=dfm_config dataset=discrete_moons               # Discrete baseline
+```
 
-**Configuration Issues:**
-- Check YAML syntax
-- Verify `_target_` paths are correct
-- Use `--config-name` for custom configs
+## 🔍 Monitoring and Visualization
 
-**Training Issues:**
-- Monitor GPU memory usage
-- Check gradient clipping settings
-- Verify data type consistency
+- **Automatic checkpointing**: Models saved in `outputs/<timestamp>/`
+- **Loss tracking**: Training progress logged automatically
+- **Visualization**: Automatic plot generation (when enabled)
+- **Config logging**: Full configuration saved with results
 
-## Migration from Old System
+## 📊 Performance Tips
 
-The new system replaces the complex old structure:
-- Old `main.py` → New `main_hydra.py` + `run.py`
-- Complex dataset classes → Simplified `PoissonMixtureDataset`
-- Manual configuration → Hydra config system
-- CPU bridges → GPU CuPy bridges
-- Complex training → Clean `CountFlowTrainer`
+1. **GPU Usage**: Enable CUDA with `device=cuda` 
+2. **Batch Size**: Tune `training.batch_size` for your GPU memory
+3. **Architecture**: Try attention for complex dependencies, MLP for speed
+4. **Steps**: More `n_steps` = better quality but slower sampling
+5. **Checkpointing**: Use `training.save_every` to save progress
 
-Key benefits:
-- 3-5x faster training with GPU bridges
-- Much cleaner and more maintainable code
-- Reproducible experiments with Hydra
-- Easy configuration and experimentation 
+## 🔧 Troubleshooting
+
+**Configuration Errors:**
+```bash
+# Check config composition
+python main.py --cfg job
+
+# Validate config without training  
+python main.py --cfg hydra
+```
+
+**Memory Issues:**
+- Reduce `training.batch_size`
+- Reduce `data_dim` or `n_steps`  
+- Use smaller `hidden_dim` in architectures
+- For CuPy bridges: Check GPU memory with `nvidia-smi`
+
+**Count Flow Issues:**
+- Ensure non-negative integer data for Skellam bridges
+- Use `model=energy_score` or `model=crps` with count data
+- Check that data dimensions match architecture configurations
+- For constrained bridges: Verify mean constraint satisfaction
+
+**Baseline Comparison Issues:**
+- Use `dataset=discrete_moons` for discrete flow experiments
+- Use `model=cross_entropy` with discrete flows (DFM)
+- Ensure vocabulary size matches in architecture configs for DFM
+
+## 📖 Citation
+
+If you use this framework in your research, please cite:
+
+```bibtex
+@software{counting_flow_matching_framework,
+  title={Counting Flow Matching Framework},
+  author={Your Name},
+  year={2024},
+  url={https://github.com/your-repo}
+}
+```
+
+## 📝 License
+
+[Add your license here]
+
+---
+
+**🚀 Ready to start experimenting with count flows?** Try `python main.py` for count-based flow matching or explore the baseline methods for comparison! 

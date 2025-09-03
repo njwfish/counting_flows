@@ -1,0 +1,3 @@
+# Discrete output for categorical models: [data_dim, vocab_size]
+- ${dataset.data_dim}
+- ${dataset.value_range} 

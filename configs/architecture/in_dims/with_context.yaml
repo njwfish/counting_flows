@@ -1,0 +1,4 @@
+# Standard flow matching inputs: [x_t, t]
+- ${dataset.data_dim}
+- 1 
+- ${model.context_dim}

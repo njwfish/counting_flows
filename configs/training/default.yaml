@@ -1,11 +1,11 @@
 # Default Training Configuration
 
 # Trainer instantiation
-_target_: training.CountFlowTrainer
+_target_: training.FlowTrainer
 
 # Training parameters
-num_epochs: 500
-learning_rate: 1e-3
+num_epochs: 5000
+learning_rate: 2e-4
 weight_decay: 0.0
 
 # Device and computation
@@ -18,5 +18,5 @@ num_workers: 0
 
 # Logging and checkpointing
 print_every: 10
-save_every: 25
+save_every: 50
 # output_dir is now passed automatically by main.py
