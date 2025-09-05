@@ -21,4 +21,4 @@ def make_weight_schedule(K, schedule_type="linear", **kwargs):
         weights: array of shape (K+1,) with weights from 0 to 1
     """
     
-    return lambda t: weight_functions[schedule_type](t, **kwargs)
+    return lambda t: weight_functions[schedule_type](t)

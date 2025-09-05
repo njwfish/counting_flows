@@ -43,7 +43,7 @@ class DiscreteFlowBridge:
         # Sample time
         if t is not None:
             # every other bridge is 1 -> 0 but here we do 0 -> 1, so we need to flip the time
-            t = 1 - torch.full((batch_size,), t, device=x_0.device)
+            t = torch.full((batch_size,), t, device=x_0.device)
         else:
             if self.homogeneous_time:
                 t = torch.rand(1, device=x_0.device).expand(batch_size, 1)
@@ -52,17 +52,17 @@ class DiscreteFlowBridge:
         
         # Apply zero masking: x_t = where(rand < t, x_1, x_0)
         # Each dimension independently chooses x_1 with probability t
-        mask = torch.rand_like(x_0.float()) < t[:, None]
+        mask = torch.rand_like(x_0.float()) < 1 - t[:, None]
         # this is flipped so its a bit weird: we flow from 1 to 0 but in time its 0 to 1
         x_t = torch.where(mask, x_0, x_1)
 
         # again we flip the time for consistency with the other bridges, so all that will use 0 -> 1 is the actual sampling process
-        return 1 - t.unsqueeze(1), x_t.float(), x_0.float()
+        return t.unsqueeze(1), x_t.float(), x_0.float()
 
     def sample_step(self, t_curr, t_next, x_t, logits, **z):
         """Single forward sampling step using discrete time"""
-        t_curr = 1 - t_curr
-        t_next = 1 - t_next
+        t_curr, t_next = 1 - t_curr, 1 - t_next
+        # print(t_curr, t_next)
         # Sample from predicted distribution
         p1 = torch.softmax(logits, dim=-1)
         
@@ -76,7 +76,7 @@ class DiscreteFlowBridge:
             u = (p1 - one_hot_x_t) / (1.0 - t_curr)
             
             # Take discrete step forward in time
-            dt = (t_curr - t_next)
+            dt = (t_next -t_curr)
             new_probs = one_hot_x_t + dt * u
             new_probs = torch.clamp(new_probs, min=0.0)
             new_probs = new_probs / (new_probs.sum(dim=-1, keepdim=True) + 1e-8)
@@ -123,9 +123,16 @@ class DiscreteFlowBridge:
         xhat_traj = []
         
         # Forward sampling loop (note: DFM goes forward, unlike CFM/Diffusion)
+        # for k in range(n_steps, 0, -1):
+        #     t_curr = time_points[k]
+        #     t_next = time_points[k-1]
+        # for k in range(0, n_steps):
+        #     t_curr = time_points[k]
+        #     t_next = time_points[k+1]
         for k in range(n_steps, 0, -1):
             t_curr = time_points[k]
             t_next = time_points[k-1]
+            print("outer", t_curr, t_next)
             t = t_curr.expand(b, 1)
             with torch.no_grad():
                 logits = model.forward({"x_t": x_t.float(), "t": t, **z})
