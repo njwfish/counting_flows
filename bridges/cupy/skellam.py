@@ -135,9 +135,6 @@ class SkellamBridge:
             b = x_1.shape[0]
             x_1 = x_t = cp.from_dlpack(x_1).round().astype(cp.int32)
 
-            if guidance_x_0 is not None:
-                guidance_x_0 = cp.from_dlpack(guidance_x_0).round().astype(cp.int32)
-
             time_points = cp.linspace(0, 1, n_steps + 1)
             
             traj, xhat_traj = [x_t], []
@@ -146,12 +143,13 @@ class SkellamBridge:
                 t_next = time_points[k-1]
                 t = cp.broadcast_to(time_points[k], (b, 1))
                 x_t_dl, t_dl = dlpack_backend(x_t, t, backend=self.backend, dtype="float32")
-                model_out = model.sample(x_t=x_t_dl, t=t_dl, **z)
+
+                x0_hat_t = model.sample(x_t=x_t_dl, t=t_dl, **z)
 
                 if guidance_x_0 is not None:
                     x0_hat_t =  guidance_schedule[k] * guidance_x_0 + (1 - guidance_schedule[k]) * x0_hat_t
 
-                x_t, x0_hat_t = self.sample_step(t_curr, t_next, x_t, model_out, **z, return_in_backend=False)
+                x_t, x0_hat_t = self.sample_step(t_curr, t_next, x_t, x0_hat_t, **z, return_in_backend=False)
 
                 if return_trajectory: traj.append(x_t)
                 if return_x_hat:     xhat_traj.append(x0_hat_t)
