@@ -3,6 +3,7 @@ import os
 import logging
 import hashlib
 import json
+from typing import Optional, List
 from omegaconf import DictConfig, OmegaConf
 
 # Enable JIT compilation for better performance
@@ -35,7 +36,7 @@ def maybe_compile(func):
     return func
 
 
-def get_model_hash(cfg: DictConfig) -> str:
+def get_model_hash(cfg: DictConfig, excluded_params: Optional[List[str]] = None) -> str:
     """
     Get model hash excluding training and sampling parameters.
     Only includes model-relevant configuration for consistent model identification.
@@ -47,6 +48,8 @@ def get_model_hash(cfg: DictConfig) -> str:
     config_copy.pop('training', None)
     
     # Remove other non-model-relevant sections and parameters
+    if excluded_params is None:
+        excluded_params = []
     excluded_params = [
         # Hydra/experiment management
         'hydra', 'defaults', 'logging',
@@ -54,7 +57,7 @@ def get_model_hash(cfg: DictConfig) -> str:
         'device', 'create_plots',
         # Sampling parameters
         'n_steps', 'n_samples'
-    ]
+    ] + excluded_params
     
     for param in excluded_params:
         config_copy.pop(param, None)

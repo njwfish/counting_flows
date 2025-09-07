@@ -83,7 +83,6 @@ class CFMBridge:
                 t = torch.full((batch_size,), t, device=x_0.device)
             else:
                 t = t.to(x_0.device)
-            t = torch.full((batch_size,), t, device=x_0.device)
         else:
             if self.homogeneous_time:
                 t = torch.rand(1, device=x_0.device).expand(batch_size, 1)

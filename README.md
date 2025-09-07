@@ -154,24 +154,32 @@ The framework is built around modular components:
 ### Key Components
 
 **Bridges** (`bridges/`):
-- `skellam.py`: Core Poisson birth-death bridge implementation
-- `constrained.py`: Mean-constrained bridges for aggregate modeling
-- `multimodal.py`: Joint bridges for mixed data types
+- **Count Bridges**: `cupy/skellam.py`, `numpy/skellam.py` - GPU/CPU Poisson birth-death bridges
+- **Constrained Bridges**: `cupy/constrained.py`, `numpy/constrained.py` - Mean-constrained count bridges 
+- **Baseline Bridges**: `torch/cfm.py` (Continuous Flow Matching), `torch/dfm.py` (Discrete Flow Matching)
+- **Diffusion Bridge**: `torch/diffusion.py` - VPSDE diffusion implementation
+- **Multimodal Bridge**: `torch/multimodal.py` - Wrapper for joint multi-modality modeling
 
-**Models** (`models/`):
-- `energy_score.py`: Distributional energy score loss
-- `energy_deconv.py`: Deconvolution with aggregate constraints
-- `energy_multimodal.py`: Joint image-count modeling
+**Models/Losses** (`models/`):
+- `energy.py`: Core distributional energy score loss
+- `energy_deconv.py`: Deconvolution with aggregate constraints and KL projection
+- `energy_multimodal.py`: Joint image-count energy scoring
+- `energy_multimodal_deconv.py`: Combined multimodal + deconvolution
+- `mse.py`, `cross_entropy.py`, `dfm.py`: Baseline losses for comparison
 
 **Architectures** (`architecture/`):
-- `uvit_multimodal.py`: Multimodal U-ViT for joint generation
+- `mlp.py`: Flexible MLPs with configurable input concatenation
+- `attention.py`: BERT-style transformer with positional embeddings
+- `pos_unet.py`: Positional U-Net with encoder-decoder structure
+- `uvit.py`, `uvit_multimodal.py`: U-ViT transformers for (multimodal) generation
 - `scformer.py`: Transformer for genomic sequence conditioning
-- `mlp.py`: Flexible MLPs with configurable inputs/outputs
 
 **Datasets** (`datasets/`):
-- `exprbyseq.py`: Spatial transcriptomics with sequence conditioning
-- `gaussian_deconv.py`: Synthetic deconvolution benchmarks
-- `mnist_mixture.py`: Multimodal image-count datasets
+- `gaussian_mixture.py`: Gaussian mixtures with integer outputs
+- `gaussian_deconv.py`: Deconvolution benchmarks with aggregate constraints
+- `mnist.py`, `mnist_mixture.py`: MNIST and MNIST+count multimodal datasets
+- `exprbyseq.py`: Spatial transcriptomics with genomic sequence conditioning
+- `discrete_moons.py`: Discrete version of two-moons dataset
 
 ## 🔧 Installation
 
@@ -214,20 +222,31 @@ Energy score and CRPS losses are strictly proper scoring rules that capture full
 The framework uses Hydra for structured configuration management:
 
 ```yaml
-# config.yaml
+# config.yaml (default configuration)
 defaults:
-  - bridge: skellam          # Discrete bridge type
-  - model: energy_score      # Distributional loss
-  - architecture: uvit       # Neural architecture  
-  - dataset: gaussian_mixture # Data source
-  - training: default        # Training parameters
+  - bridge: skellam                              # Count bridge type
+  - model: energy_score                          # Distributional loss
+  - architecture: mlp                            # Neural architecture  
+  - architecture/in_dims: with_noise             # Input dimension spec
+  - architecture/out_dim: scalar                 # Output dimension spec
+  - dataset: low_rank_gaussian_mixture_5d        # Data source
+  - training: default                            # Training parameters
+  - slack_sampler: bessel                        # Slack sampling method
 
-data_dim: 10
-n_steps: 50
-training:
-  num_epochs: 1000
-  batch_size: 512
+architecture:
+  act_fn: softplus                               # Activation for count outputs
+
+device: cuda
+seed: 42
+train_split: 0.8
 ```
+
+### Available Configuration Options
+
+**Bridges**: `skellam`, `constrained`, `cfm`, `dfm`, `diffusion`, `multimodal`
+**Models**: `energy_score`, `energy_deconv`, `energy_multimodal`, `energy_multimodal_deconv`, `mse`, `cross_entropy`, `dfm`  
+**Architectures**: `mlp`, `attention`, `pos_unet`, `uvit`, `uvit_multimodal`, `scformer`
+**Datasets**: `gaussian_mixture`, `gaussian_deconv`, `mnist_mixture`, `exprbyseq`, `discrete_moons`
 
 ### Advanced Configurations
 
@@ -237,12 +256,10 @@ training:
 model: energy_score_deconv
 dataset: gaussian_deconv
 training: deconv
-group_size: 10
-agg_noise: 0.1
 ```
 
 **Multimodal setup**:
-```yaml
+```yaml  
 # multimodal_lowrank.yaml
 architecture: uvit_multimodal
 model: energy_multimodal
@@ -250,37 +267,25 @@ bridge: multimodal
 dataset: mnist_lowrank_gaussian_mixture
 ```
 
-## 📈 Experimental Results
+**Input/Output Dimension Flexibility**:
+```yaml
+# architecture/in_dims/with_M_t_and_noise.yaml - includes slack variables
+# architecture/in_dims/with_context.yaml - includes conditioning
+# architecture/out_dim/discrete.yaml - for categorical outputs
+```
 
-The framework has been validated on:
+## 🔧 Implementation Highlights
 
-1. **Synthetic count generation**: Poisson mixtures with exact bridge validation
-2. **Deconvolution benchmarks**: Recovery of unit-level structure from aggregates  
-3. **Spatial transcriptomics**: Cell-level expression from spatial measurements
-4. **Multimodal generation**: Joint image-count modeling with cross-modal consistency
+### GPU-Accelerated Count Bridges
+The repository includes both CuPy (`bridges/cupy/`) and NumPy (`bridges/numpy/`) implementations of the count bridges, enabling efficient GPU computation for large-scale problems.
 
-Key findings:
-- Exact Chapman-Kolmogorov property enables stable training
-- Distributional losses outperform MSE for count uncertainty
-- Deconvolution works best with moderate group sizes (10-100 units)
-- Multimodal architectures capture cross-modal dependencies
+### Flexible Architecture System
+The modular architecture system supports:
+- **Input concatenation**: Automatically handles different input types (time, noise, context, slack variables)
+- **Configurable dimensions**: List-based input/output specifications via Hydra configs
+- **Multi-output support**: Single models can output both images and count vectors
 
-## 🤝 Contributing
-
-This is a research codebase under active development. Contributions are welcome, particularly:
-- New bridge implementations for different discrete distributions
-- Additional baseline methods for comparison
-- Applications to new domains (chemistry, ecology, etc.)
-- Theoretical extensions and analysis
-
-## 📋 License
-
-MIT License - see `LICENSE` file for details.
-
-## 🔗 Related Work
-
-- **Flow Matching**: Continuous normalizing flows with optimal transport
-- **Discrete Diffusion**: Categorical and ordinal diffusion models  
-- **Deconvolution**: Bulk RNA-seq and spatial transcriptomics analysis
-- **Schrödinger Bridges**: Optimal transport with entropic regularization
-- **Count Data Models**: Poisson regression and negative binomial models
+### Sophisticated Sampling
+- **Slack samplers**: Multiple implementations (`bessel`, `poisson`, `const`) for different slack variable distributions
+- **Randomized rounding**: Exact integer projection algorithms for deconvolution constraints
+- **Trajectory optimization**: Adaptive endpoint selection for stable deconvolution training

@@ -18,7 +18,7 @@ num_workers: 0
 
 # Logging and checkpointing
 print_every: 1
-save_every: 5
+save_every: 1
 # output_dir is now passed automatically by main.py
 
 classifier_free_guidance_prob: 0.1

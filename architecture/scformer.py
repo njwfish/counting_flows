@@ -58,9 +58,9 @@ class SCFormer(nn.Module):
             x, _ = attn(x, x, x)
             x = x + x_init
             x = norm(x)
-        x_0_hat = torch.nn.softplus(self.out_proj(x).squeeze(-1))
+        x_0_hat = self.out_proj(x).squeeze(-1)
         if target_sum is not None:
-            x_0_hat = torch.nn.softplus(x_0_hat)
+            x_0_hat = torch.nn.functional.softplus(x_0_hat)
             pooled_seq_emb = seq_emb_rep.mean(dim=1)
             target_sum = target_sum.unsqueeze(0).expand(x_t.shape[0], -1)
             y = torch.cat([x_0_hat, x_t, class_emb, target_sum, pooled_seq_emb], dim=-1)
@@ -69,7 +69,7 @@ class SCFormer(nn.Module):
                 y, _ = attn_proj(y, y, y)
                 y = y + y_init
                 y = norm(y)
-            x_0_hat = torch.nn.softplus(y)
+            x_0_hat = torch.nn.functional.softplus(y)
         return x_0_hat
 
 

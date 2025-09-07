@@ -88,42 +88,57 @@ class DeconvolutionGaussianMixtureDataset(Dataset):
             dirichlet_dist = Dirichlet(self.dirichlet_concentration * self.mixture_dataset.weights_source * self.k)
             component_weights = dirichlet_dist.sample((self.size,))
             
+            # PRE-COMPUTE: Component indices for fast lookup (major speedup!)
+            self.component_indices = {}
+            for component_id in range(self.k):
+                component_mask = (self.mixture_dataset.x0_components == component_id)
+                self.component_indices[component_id] = torch.where(component_mask)[0]
+            
             # Pre-allocate storage for all groups and their component info
             self.groups = torch.zeros(self.size, self.group_size, self.data_dim, dtype=torch.float32)
             self.group_component_info = torch.zeros(self.size, self.group_size, dtype=torch.int64)
             self.group_one_hot = torch.zeros(self.size, self.group_size, self.k, dtype=torch.float32)
             
-            # Create each group
-            for group_idx in range(self.size):
-                # Sample component assignments for this group
-                component_assignments = torch.multinomial(
-                    component_weights[group_idx], 
-                    self.group_size, 
-                    replacement=True
-                )
+            # VECTORIZED: Sample all component assignments at once
+            all_component_assignments = torch.multinomial(
+                component_weights.view(-1, self.k),  # [size, k]
+                self.group_size, 
+                replacement=True
+            )  # [size, group_size]
+            
+            # Store component assignments
+            self.group_component_info = all_component_assignments
+            
+            # VECTORIZED: Create one-hot encoding all at once
+            self.group_one_hot = torch.zeros(self.size, self.group_size, self.k, dtype=torch.float32)
+            self.group_one_hot.scatter_(2, all_component_assignments.unsqueeze(-1).long(), 1.0)
+            
+            # VECTORIZED: Sample from components efficiently
+            # Flatten all assignments to process in batches by component
+            flat_assignments = all_component_assignments.flatten()  # [size * group_size]
+            flat_samples = torch.zeros(self.size * self.group_size, self.data_dim, dtype=torch.float32)
+            
+            # Process each component in batch
+            for component_id in range(self.k):
+                # Find all positions that need this component
+                component_mask = (flat_assignments == component_id)
+                n_needed = component_mask.sum().item()
                 
-                # Sample actual group members from existing dataset samples  
-                group_members = []
-                for member_idx, component_id in enumerate(component_assignments):
-                    component_id = component_id.item()
+                if n_needed > 0:
+                    # Get pre-computed indices for this component
+                    component_indices = self.component_indices[component_id]
                     
-                    # Find all samples from this component
-                    component_mask = (self.mixture_dataset.x0_components == component_id)
-                    component_indices = torch.where(component_mask)[0]
+                    # Randomly select n_needed samples (with replacement)
+                    selected_indices = component_indices[torch.randint(0, len(component_indices), (n_needed,))]
+                    selected_samples = self.mixture_dataset.x0_data[selected_indices].float()
                     
-                    # Randomly select one sample from this component (allows duplicates)
-                    selected_idx = component_indices[torch.randint(0, len(component_indices), (1,))]
-                    sample = self.mixture_dataset.x0_data[selected_idx.item()]
-                    
-                    group_members.append(sample)
-                
-                # Store the group and component info
-                self.groups[group_idx] = torch.stack(group_members)
-                self.group_component_info[group_idx] = component_assignments
-                
-                # Pre-compute one-hot vectors for each group member
-                for member_idx, component_id in enumerate(component_assignments):
-                    self.group_one_hot[group_idx, member_idx, component_id] = 1.0
+                    # Assign to the appropriate positions
+                    flat_samples[component_mask] = selected_samples
+            
+            # Reshape back to groups
+            self.groups = flat_samples.view(self.size, self.group_size, self.data_dim)
+            
+            print(f"Pre-computed all {self.size} groups with vectorized operations")
 
     def __len__(self): 
         return self.size

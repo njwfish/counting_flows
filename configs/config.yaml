@@ -26,7 +26,7 @@ train_split: 0.8  # 80% train, 20% eval
 
 # Experiment settings
 experiment:
-  name: "counting_flows_experiment"
+  name: "count"
   version: "1.0"
   description: "Count-based flow matching with GPU bridges"
 
