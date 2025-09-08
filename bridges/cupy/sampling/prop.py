@@ -14,9 +14,12 @@ def proportional_proj(x, target):
     if cp.any(diff_neg):
         # if the diff is negative target is larger than current and we need to add counts   
         curr_neg_non_zero = curr[diff_neg] > 0
-        p = cp.zeros_like(x[diff_neg, :], dtype=cp.float32)
+        # we could add a smarter prior here where we sample proportional to the current counts per cell instead of uniformly
+        # this would involve multiplying by like x.sum(axis=0) instead of just doing ones_like
+        p = cp.ones_like(x[diff_neg, :], dtype=cp.float32) 
         p[curr_neg_non_zero, :] = x[diff_neg, :][curr_neg_non_zero, :].astype(cp.float32) / curr[diff_neg][curr_neg_non_zero].reshape(-1, 1)
-        delta[diff_neg, :] = multinomial(n=diff[diff_neg], p=p)
+        samp = multinomial(n=diff[diff_neg], p=p)
+        delta[diff_neg, :] = samp
     
     diff_pos = diff < 0
     if cp.any(diff_pos):

@@ -16,7 +16,8 @@ def multinomial(
       counts: ndarray of shape [..., K], summing (per‑batch) to the respective n.
     """
     # ensure p is a proper probability vector per batch
-    p = p / p.sum(axis=-1, keepdims=True)
+    # remove zeros to avoid division by zero
+    # p = p / p.sum(axis=-1, keepdims=True)
 
     # broadcast n up to the batch shape
     batch_shape = p.shape[:-1]
