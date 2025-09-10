@@ -37,6 +37,8 @@ class ExprBySeq:
         window_size = 1000,
         batch_size = 100,
         min_value = 0,
+        seed = 42,
+        train_split = 0.95,
     ):
         self.data_dim = 196608
         self.target_size = 896
@@ -61,10 +63,20 @@ class ExprBySeq:
         self.individual_col = individual_col
         self.base_individual = base_individual
         self.base_individual_idx = np.where(self.sd.obs[individual_col] == base_individual)[0]
-        self.individual_idxs = {
-            individual: np.where(self.sd.obs[individual_col] == individual)[0]
-            for individual in self.sd.obs[individual_col].unique() if individual != base_individual
-        }
+
+        # split 10% of non-base individuals into test and exclude from individual idxs
+        unique_individuals = self.sd.obs[individual_col].unique()
+        unique_individuals = [individual for individual in unique_individuals if individual != base_individual]
+        # random permute unique individuals
+        rng = np.random.default_rng(seed=seed)
+        unique_individuals = rng.permutation(unique_individuals)
+        split_idx = int(len(unique_individuals) * train_split)
+        print(f"Train split: {split_idx}, Test split: {len(unique_individuals) - split_idx}")
+        self.train_individuals, self.test_individuals = unique_individuals[:split_idx], unique_individuals[split_idx:]
+
+        self.individual_idxs = {individual: np.where(self.sd.obs[individual_col] == individual)[0] for individual in self.train_individuals}
+        self.test_individual_idxs = {individual: np.where(self.sd.obs[individual_col] == individual)[0] for individual in self.test_individuals}
+        print(f"Train cells: {sum(len(idx) for idx in self.individual_idxs.values())}, Test cells: {sum(len(idx) for idx in self.test_individual_idxs.values())}")
 
         # create one hot encoding for cell type
         target_cond = self.sd.obs[self.cell_type_col].to_numpy()

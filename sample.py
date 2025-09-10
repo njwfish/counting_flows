@@ -52,7 +52,7 @@ def run_sampling_evaluation(
     results_dir.mkdir(exist_ok=True)
     
     # Run evaluation
-    eval_result = evaluate_model(
+    eval_result, cached = evaluate_model(
         trained_model, 
         bridge, 
         dataset,
@@ -76,10 +76,11 @@ def run_sampling_evaluation(
             if isinstance(value, float) and not np.isnan(value):
                 logging.info(f"{metric_name}: {value:.4f}")
     
-    # Save evaluation data
-    eval_data_path = results_dir / "eval_data.pkl"
-    with open(eval_data_path, 'wb') as f:
-        pickle.dump(eval_data, f)
+    if not cached:
+        # Save evaluation data
+        eval_data_path = results_dir / "eval_data.pkl"
+        with open(eval_data_path, 'wb') as f:
+            pickle.dump(eval_data, f)
     
     # Generate and save plots
     plots_dir = results_dir / "plots"

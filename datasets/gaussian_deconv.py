@@ -27,6 +27,7 @@ class DeconvolutionGaussianMixtureDataset(Dataset):
     """
     def __init__(
         self,
+        size: int,
         base_size: int,
         data_dim: int,
         min_value: int,
@@ -40,7 +41,7 @@ class DeconvolutionGaussianMixtureDataset(Dataset):
         **kwargs  # Additional args passed to LowRankGaussianMixtureDataset
     ):
         super().__init__()
-        self.size = base_size // group_size
+        self.size = size
         self.base_size = base_size
         self.data_dim = data_dim
         self.min_value = min_value
@@ -88,7 +89,6 @@ class DeconvolutionGaussianMixtureDataset(Dataset):
             dirichlet_dist = Dirichlet(self.dirichlet_concentration * self.mixture_dataset.weights_source * self.k)
             component_weights = dirichlet_dist.sample((self.size,))
             
-            # PRE-COMPUTE: Component indices for fast lookup (major speedup!)
             self.component_indices = {}
             for component_id in range(self.k):
                 component_mask = (self.mixture_dataset.x0_components == component_id)
@@ -99,7 +99,6 @@ class DeconvolutionGaussianMixtureDataset(Dataset):
             self.group_component_info = torch.zeros(self.size, self.group_size, dtype=torch.int64)
             self.group_one_hot = torch.zeros(self.size, self.group_size, self.k, dtype=torch.float32)
             
-            # VECTORIZED: Sample all component assignments at once
             all_component_assignments = torch.multinomial(
                 component_weights.view(-1, self.k),  # [size, k]
                 self.group_size, 
@@ -109,11 +108,9 @@ class DeconvolutionGaussianMixtureDataset(Dataset):
             # Store component assignments
             self.group_component_info = all_component_assignments
             
-            # VECTORIZED: Create one-hot encoding all at once
             self.group_one_hot = torch.zeros(self.size, self.group_size, self.k, dtype=torch.float32)
             self.group_one_hot.scatter_(2, all_component_assignments.unsqueeze(-1).long(), 1.0)
             
-            # VECTORIZED: Sample from components efficiently
             # Flatten all assignments to process in batches by component
             flat_assignments = all_component_assignments.flatten()  # [size * group_size]
             flat_samples = torch.zeros(self.size * self.group_size, self.data_dim, dtype=torch.float32)

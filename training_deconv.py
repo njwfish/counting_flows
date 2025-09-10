@@ -9,11 +9,12 @@ from torch.utils.data import DataLoader
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, List
 import logging
+import random
 
 from training import Trainer
 
 
-def sparse_aggregation_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
+def sparse_aggregation_collate_fn(batch: List[Dict[str, Any]], max_batch_size: Optional[int] = None) -> Dict[str, Any]:
     """
     Flexible custom collate function that handles nested structures and variable group sizes.
     
@@ -49,8 +50,31 @@ def sparse_aggregation_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]
             raise ValueError("No tensor found in x_1 dict")
         else:
             return x_1.shape[0]
+
+    def _filter_batch_by_size(batch, group_sizes, max_batch_size):
+        """Filter batch to respect max_batch_size constraints"""
+        # Filter oversized groups with warning
+        valid_items = [(item, size) for item, size in zip(batch, group_sizes) if size <= max_batch_size]
+        if len(valid_items) < len(batch):
+            dropped = len(batch) - len(valid_items)
+            print(f"Warning: Dropped {dropped} group(s) exceeding max_batch_size={max_batch_size}")
+        
+        if not valid_items:
+            return [], []
+        
+        items, sizes = zip(*valid_items)
+        
+        # Random dropping until under threshold
+        indices = list(range(len(items)))
+        while sum(sizes[i] for i in indices) > max_batch_size:
+            indices.pop(random.randint(0, len(indices) - 1))
+        
+        return len(indices), [items[i] for i in indices], [sizes[i] for i in indices]
     
     group_sizes = [_get_group_size(item['x_1']) for item in batch]
+    if max_batch_size is not None:
+        batch_size, batch, group_sizes = _filter_batch_by_size(batch, group_sizes, max_batch_size)
+
     total_samples = sum(group_sizes)
     
     def _is_group_tensor(tensor, group_size):
@@ -139,7 +163,6 @@ def sparse_aggregation_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]
     # Add aggregation metadata
     result['A'] = A_sparse
     result['group_sizes'] = torch.tensor(group_sizes, dtype=torch.long)
-        
     return result
 
 
@@ -151,6 +174,8 @@ class DeconvTrainer(Trainer):
     
     def __init__(
         self,
+        condition_on_end_time: bool = False,
+        max_batch_size: Optional[int] = None,
         **kwargs
     ):
         """
@@ -169,6 +194,8 @@ class DeconvTrainer(Trainer):
         super().__init__(
             **kwargs
         )
+        self.condition_on_end_time = condition_on_end_time
+        self.max_batch_size = max_batch_size
 
     def _create_dataloader(self, dataset):
         """Create DataLoader from dataset with custom sparse aggregation collate function"""
@@ -178,9 +205,9 @@ class DeconvTrainer(Trainer):
             shuffle=self.shuffle,
             num_workers=self.num_workers,
             pin_memory=torch.cuda.is_available(),
-            collate_fn=sparse_aggregation_collate_fn
+            collate_fn=lambda x: sparse_aggregation_collate_fn(x, self.max_batch_size)
         )
-    
+
     def training_step(self, model: torch.nn.Module, bridge: Any, batch: Dict[str, torch.Tensor]) -> float:
         """Execute a single training step"""
         # Extract data from batch
@@ -232,48 +259,55 @@ class DeconvTrainer(Trainer):
         epoch_losses = []
 
         # e step
-        model.eval()
-        batches = []
         for batch in dataloader:
-            if isinstance(batch['x_1'], dict):
-                x_1 = {}
-                for k in batch['x_1']:
-                    x_1[k] = batch['x_1'][k].to(self.device)
-            else:
-                x_1 = batch['x_1'].to(self.device)
-            
-            if isinstance(batch['X_0'], dict):
-                for k in batch['X_0']:
-                    batch['X_0'][k] = batch['X_0'][k].to(self.device)
-            else:
-                batch['X_0'] = batch['X_0'].to(self.device)
-            
-            context = {'target_sum': batch['X_0']}
-            for key in batch:
-                if key not in ['x_1', 'x_0', 'X_0', 'group_sizes']:
-                    batch[key] = batch[key].to(self.device)
-                    context[key] = batch[key].to(self.device)
+            # extract x_1 in multimodal and single modality cases
+            model.eval()
+            with torch.no_grad():
+                if isinstance(batch['x_1'], dict):
+                    x_1 = {}
+                    for k in batch['x_1']:
+                        x_1[k] = batch['x_1'][k].to(self.device)
+                else:
+                    x_1 = batch['x_1'].to(self.device)
+                
+                if isinstance(batch['X_0'], dict):
+                    for k in batch['X_0']:
+                        batch['X_0'][k] = batch['X_0'][k].to(self.device)
+                else:
+                    batch['X_0'] = batch['X_0'].to(self.device)
+                
+                context = {'target_sum': batch['X_0']}
+                for key in batch:
+                    if key not in ['x_1', 'x_0', 'X_0', 'group_sizes']:
+                        batch[key] = batch[key].to(self.device)
+                        context[key] = batch[key].to(self.device)
 
-            if isinstance(batch['x_0'], dict):
-                # this lets us condition on x_0 if it is provided (and not in X_0)
-                # using the fact that the model "samples" from x_0 if x_0 is provided, e.g. "conditional" sampling
-                # across modalities 
-                context_x_0 = {}
-                for k in batch['x_0']:
-                    if k not in batch['X_0']:
-                        context_x_0[k] = batch['x_0'][k].to(self.device)
+                if isinstance(batch['x_0'], dict):
+                    # this lets us condition on x_0 if it is provided (and not in X_0)
+                    # using the fact that the model "samples" from x_0 if x_0 is provided, e.g. "conditional" sampling
+                    # across modalities 
+                    context_x_0 = {}
+                    for k in batch['x_0']:
+                        if k not in batch['X_0']:
+                            context_x_0[k] = batch['x_0'][k].to(self.device)
 
-                context['x_0'] = context_x_0
+                    context['x_0'] = context_x_0
+                
 
-            batch['x_0'] = bridge.sampler(
-                x_1, context, model
-            )
+                sampler_kwargs = {
+                        'start_times': {k: 0.0 for k in context['x_0']},
+                        'x_start_time': {k: context['x_0'][k] for k in context['x_0']}
+                } if self.condition_on_end_time else {}
 
-            batches.append(batch)
 
-        # m step
-        model.train()
-        for batch in batches:
+                # if multidimensional time and we have x_0 we should condition on the start time zero for the observed modalities
+                batch['x_0'] = bridge.sampler(
+                    x_1, context, model, 
+                    **sampler_kwargs
+                )
+
+            # m step
+            model.train()
             # sample time step
             batch_loss = self.training_step(model, bridge, batch)
             epoch_losses.append(batch_loss)

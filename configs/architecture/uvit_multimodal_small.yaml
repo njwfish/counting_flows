@@ -2,8 +2,8 @@
 _target_: architecture.uvit_multimodal.MultimodalUViT
 
 # Image parameters
-img_size: 256
-patch_size: 16
+img_size: 28
+patch_size: 4
 in_chans: 1
 
 # Count parameters
@@ -14,9 +14,9 @@ num_count_patches: 4
 noise_dim: ${model.noise_dim}
 
 # Architecture parameters
-embed_dim: 512
-depth: 8
-num_heads: 8
+embed_dim: 64
+depth: 6
+num_heads: 4
 mlp_ratio: 4.0
 qkv_bias: false
 qk_scale: null

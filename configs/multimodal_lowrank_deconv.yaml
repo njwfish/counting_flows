@@ -1,10 +1,10 @@
 # Multimodal Low-Rank Test Configuration
 defaults:
-  - bridge: multimodal
+  - bridge: multitime
   - model: energy_multimodal_deconv
-  - architecture: uvit_multimodal
+  - architecture: uvit_multimodal_small
   - dataset: gaussian_deconv_mnist
-  - training: deconv
+  - training: multimodal_deconv
   - slack_sampler: bessel
   - _self_
 

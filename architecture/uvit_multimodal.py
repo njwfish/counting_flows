@@ -107,7 +107,7 @@ class MultimodalUViT(nn.Module):
         embed_dim=768, depth=12, num_heads=12, mlp_ratio=4.,
         qkv_bias=False, qk_scale=None, norm_layer=nn.LayerNorm, 
         mlp_time_embed=False, num_classes=-1,
-        use_checkpoint=False, conv=True, skip=True
+        use_checkpoint=False, conv=True, skip=True, time_dim=2
     ):
         super().__init__()
         self.num_features = self.embed_dim = embed_dim
@@ -128,11 +128,16 @@ class MultimodalUViT(nn.Module):
         total_patches = num_img_patches + num_count_patches
 
         # Time embedding
-        self.time_embed = nn.Sequential(
-            nn.Linear(embed_dim, 4 * embed_dim),
-            nn.SiLU(),
-            nn.Linear(4 * embed_dim, embed_dim),
-        ) if mlp_time_embed else nn.Identity()
+        if mlp_time_embed:
+            self.time_embed = nn.Sequential(
+                nn.Linear(time_dim * embed_dim, 4 * embed_dim),
+                nn.SiLU(),
+                nn.Linear(4 * embed_dim, embed_dim),
+            )
+        elif time_dim > 1:
+            self.time_embed = nn.Linear(time_dim * embed_dim, embed_dim)
+        else:
+            self.time_embed = nn.Identity()
         
         # Noise embedding (for energy score / distributional diffusion)
         self.noise_proj = nn.Linear(noise_dim, embed_dim)
@@ -231,9 +236,11 @@ class MultimodalUViT(nn.Module):
         x = torch.cat([img_patches, count_patches], dim=1)  # [B, total_patches, embed_dim]
         
         # Add time embedding
-        t_flat = t.squeeze() if t.dim() > 1 else t  # Ensure t is 1D: [B]
-        time_token = self.time_embed(timestep_embedding(t_flat, self.embed_dim))
-        time_token = time_token.unsqueeze(1)
+        if isinstance(t, dict):
+            t = torch.hstack([t[k] for k in t])
+
+        t_flat = t.flatten()
+        time_token = self.time_embed(timestep_embedding(t_flat, self.embed_dim).reshape(B, -1)).unsqueeze(dim=1)
         x = torch.cat((time_token, x), dim=1)  # [B, 1 + total_patches, embed_dim]
         
         # Project noise to embed_dim and then embed

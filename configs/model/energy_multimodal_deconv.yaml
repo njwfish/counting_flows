@@ -5,6 +5,6 @@ _target_: models.energy_multimodal_deconv.MultimodalDeconvolutionEnergyScoreLoss
 architecture: ${architecture}
 
 # Energy score parameters
-noise_dim: 16
-m_samples: 8  # Smaller for faster testing
+noise_dim: 128
+m_samples: 4  # Smaller for faster testing
 lambda_energy: 1.0

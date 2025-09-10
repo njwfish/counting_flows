@@ -1,10 +1,10 @@
 # Multimodal Low-Rank Test Configuration
 defaults:
   - bridge: multitime
-  - model: energy_multimodal
-  - architecture: uvit_multimodal_small
-  - dataset: mnist_lowrank_gaussian_mixture
-  - training: default
+  - model: energy_multimodal_deconv
+  - architecture: uvit_multimodal
+  - dataset: merfish_deconv
+  - training: merfish_deconv
   - slack_sampler: bessel
   - _self_
 

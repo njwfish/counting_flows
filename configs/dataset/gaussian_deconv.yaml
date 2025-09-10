@@ -1,6 +1,8 @@
 # Poisson Mixture Dataset Configuration
 _target_: datasets.gaussian_deconv.DeconvolutionGaussianMixtureDataset
 
+size: 5000
+
 # Dataset parameters
 base_size: 50000  # total samples in dataset (pre-sampled for speed)
 group_size: 10  # number of samples in each group
@@ -20,3 +22,4 @@ min_eigenvalue: 0.1  # minimum eigenvalue to ensure positive definiteness
 # Random seed for reproducibility
 seed: 42
 context_dim: 5
+dirichlet_concentration: 1.0

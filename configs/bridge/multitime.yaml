@@ -1,5 +1,5 @@
 # Multimodal Bridge Configuration
-_target_: bridges.torch.multimodal.MultimodalBridge
+_target_: bridges.torch.multimodal.MultiTimeDimensionalBridge
 
 # Individual bridge configurations for each modality
 bridges:

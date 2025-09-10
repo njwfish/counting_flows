@@ -107,7 +107,7 @@ def evaluate_model(model: torch.nn.Module, bridge: Any, dataset: Any,
         cached_results = load_cached_evaluation(config_path)
         if cached_results:
             logging.info("Using cached evaluation results")
-            return cached_results
+            return cached_results, True
     
     # Detect data type
     data_type = detect_data_type(dataset)
@@ -141,7 +141,7 @@ def evaluate_model(model: torch.nn.Module, bridge: Any, dataset: Any,
         'true_data': true_data,
         'metrics': metrics,
         'data_type': data_type
-    }
+    }, False
 
 
 def to_numpy(x):

@@ -59,6 +59,12 @@ class MultimodalEnergyScoreLoss(EnergyScoreLoss):
             if isinstance(value, torch.Tensor):
                 base_input = value
                 break
+            elif isinstance(value, dict):
+                for v in value.values():
+                    if isinstance(v, torch.Tensor):
+                        base_input = v
+                        break
+                break
         
         if base_input is None:
             raise ValueError("No tensor found in inputs")
