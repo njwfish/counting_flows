@@ -10,6 +10,7 @@ class SCFormer(nn.Module):
         super().__init__()
         enformer_dim = 3072
         seq_len = 896
+        self.seq_len = seq_len
         self.enformer = from_pretrained('EleutherAI/enformer-official-rough')
         self.in_proj = nn.Sequential(
             nn.Linear(enformer_dim + noise_dim + 2 + class_dim, hidden_dim),
@@ -30,13 +31,13 @@ class SCFormer(nn.Module):
         )
 
         self.in_attn_proj_proj = nn.Sequential(
-            nn.Linear(hidden_dim + 1 + class_dim + seq_len + enformer_dim, hidden_dim),
+            nn.Linear(hidden_dim + 3, hidden_dim),
             nn.SELU(),
             nn.Linear(hidden_dim, hidden_dim)
         )
 
         self.attn_proj_layers = nn.ModuleList([
-            nn.MultiheadAttention(embed_dim=hidden_dim, num_heads=num_heads, batch_first=True)
+            nn.MultiheadAttention(embed_dim=hidden_dim, num_heads=num_heads, batch_first=False)
             for _ in range(num_attn_proj_layers)
         ])
 
@@ -44,6 +45,10 @@ class SCFormer(nn.Module):
             nn.LayerNorm(hidden_dim)
             for _ in range(num_attn_proj_layers)
         ])
+
+        self.out_proj_proj = nn.Sequential(
+            nn.Linear(hidden_dim, 1),
+        )
 
     def forward(self, x_t, seq, noise, t, class_emb, target_sum=None):
         seq_emb = self.enformer(seq, return_only_embeddings=True).squeeze(0)
@@ -58,20 +63,20 @@ class SCFormer(nn.Module):
             x, _ = attn(x, x, x)
             x = x + x_init
             x = norm(x)
-        x_0_hat = self.out_proj(x).squeeze(-1)
+        x_0_hat = torch.nn.functional.softplus(self.out_proj(x).squeeze(-1))
         if target_sum is not None:
-            x_0_hat = torch.nn.functional.softplus(x_0_hat)
-            pooled_seq_emb = seq_emb_rep.mean(dim=1)
-            target_sum = target_sum.unsqueeze(0).expand(x_t.shape[0], -1)
-            y = torch.cat([x_0_hat, x_t, class_emb, target_sum, pooled_seq_emb], dim=-1)
+            # because we have noise we will have target_sum for each noise sample which lets us check the number of noise samples
+            m, _ = target_sum.shape
+            b = x_t.shape[0] // m
+            target_sum = target_sum.unsqueeze(0).expand(b, -1, -1).reshape(b * m, -1)
+            y = torch.cat([x_0_hat.unsqueeze(-1), x_t.unsqueeze(-1), target_sum.unsqueeze(-1), x], dim=-1).reshape(b, m, self.seq_len, -1)
+            y = y.reshape(b, m * self.seq_len, -1)
             y = y_init = self.in_attn_proj_proj(y)
             for attn_proj, norm in zip(self.attn_proj_layers, self.norm_proj_layers):
                 y, _ = attn_proj(y, y, y)
                 y = y + y_init
                 y = norm(y)
+            y = y.reshape(b * m, self.seq_len, -1)
+            y = self.out_proj_proj(y).squeeze(-1) + x_0_hat
             x_0_hat = torch.nn.functional.softplus(y)
         return x_0_hat
-
-
-        
-    

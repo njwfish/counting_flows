@@ -1,0 +1,6 @@
+_target_: coupling.ot.OTCollate
+ot_type: sinkhorn
+ot_params:
+  reg: 1.0
+
+scale: ${dataset.value_range}

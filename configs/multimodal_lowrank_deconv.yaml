@@ -5,6 +5,9 @@ defaults:
   - architecture: uvit_multimodal_small
   - dataset: gaussian_deconv_mnist
   - training: multimodal_deconv
+  - averaging: ema
+  - optimizer: adam
+  - scheduler: cosine
   - slack_sampler: bessel
   - _self_
 

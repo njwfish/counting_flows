@@ -1,0 +1,3 @@
+_target_: schedule.cosine_warmup_constant_lr
+warmup_steps: 100
+start_factor: 0.01

@@ -6,6 +6,8 @@ defaults:
   - architecture/out_dim: scalar
   - dataset: low_rank_gaussian_mixture_5d
   - training: default
+  - optimizer: adam
+  - scheduler: cosine
   - _self_
 
 # Hydra configuration

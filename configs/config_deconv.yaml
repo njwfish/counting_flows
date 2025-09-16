@@ -6,6 +6,9 @@ defaults:
   - architecture/out_dim: scalar
   - dataset: gaussian_deconv
   - training: deconv
+  - averaging: ema
+  - optimizer: adam_big
+  - scheduler: cosine
   - slack_sampler: bessel
   - _self_
 

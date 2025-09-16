@@ -14,9 +14,9 @@ num_count_patches: 4
 noise_dim: ${model.noise_dim}
 
 # Architecture parameters
-embed_dim: 512
-depth: 8
-num_heads: 8
+embed_dim: 768
+depth: 10
+num_heads: 12
 mlp_ratio: 4.0
 qkv_bias: false
 qk_scale: null

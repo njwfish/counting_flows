@@ -4,8 +4,10 @@ defaults:
   - architecture: mlp
   - architecture/in_dims: standard
   - architecture/out_dim: discrete
-  - dataset: low_rank_gaussian_mixture_5d
+  - dataset: low_rank_gaussian_mixture
   - training: default
+  - optimizer: adam
+  - scheduler: cosine
   - _self_
 
 

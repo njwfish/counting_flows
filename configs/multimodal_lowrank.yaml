@@ -5,6 +5,9 @@ defaults:
   - architecture: uvit_multimodal_small
   - dataset: mnist_lowrank_gaussian_mixture
   - training: default
+  - averaging: ema
+  - optimizer: adam
+  - scheduler: cosine
   - slack_sampler: bessel
   - _self_
 

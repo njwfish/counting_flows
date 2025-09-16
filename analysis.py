@@ -61,7 +61,7 @@ def get_dataset_hash(config: Dict[str, Any]) -> str:
     excluded_params = [
         'bridge', 'model', 'architecture', 'training', 'slack_sampler',
         'hydra', 'defaults', 'logging', 'device', 'create_plots', 
-        'experiment', 'n_steps', 'n_samples', 'seed'
+        'experiment', 'n_steps', 'n_samples', 'seed', 'scheduler', 'averaging', 'optimizer',
     ]
     
     return get_model_hash(cfg, excluded_params)

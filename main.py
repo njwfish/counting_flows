@@ -138,43 +138,55 @@ def main(cfg: DictConfig) -> None:
         dataset, [train_size, eval_size], 
         generator=torch.Generator().manual_seed(cfg.seed)  # Reproducible split
     )
+
+    # Instantiate EMA model
+    avg_model = hydra.utils.instantiate(cfg.averaging, model=model) if 'averaging' in cfg else None
     
     logging.info(f"Experiment: {cfg.experiment.name}")
     logging.info(f"Model: {type(model).__name__} ({sum(p.numel() for p in model.parameters()):,} params)")
     logging.info(f"Dataset: {len(dataset)} samples ({len(train_dataset)} train, {len(eval_dataset)} eval), {dataset.data_dim}D")
     
+    
     # Training
     if not training_complete:
         logging.info("Starting training...")
-        trainer = hydra.utils.instantiate(cfg.training, output_dir=str(output_dir))
+        collate_fn = hydra.utils.instantiate(cfg.coupling) if 'coupling' in cfg else None
+        optimizer = hydra.utils.instantiate(cfg.optimizer, params=model.parameters())
+        scheduler = hydra.utils.instantiate(cfg.scheduler, optimizer=optimizer) if 'scheduler' in cfg else None
+        trainer = hydra.utils.instantiate(
+            cfg.training, output_dir=str(output_dir), collate_fn=collate_fn, optimizer=optimizer, scheduler=scheduler
+        )
         
         # Load from checkpoint if available
         if checkpoint:
             model.load_state_dict(checkpoint['model_state_dict'])
+            if avg_model is not None and 'avg_model_state_dict' in checkpoint:
+                avg_model.load_state_dict(checkpoint['avg_model_state_dict'])
             trainer.losses = checkpoint['losses']
             trainer.start_epoch = checkpoint['current_epoch']
             
             # Setup optimizer and load its state
             model = model.to(device)
-            trainer.optimizer = torch.optim.Adam(
-                model.parameters(),
-                lr=cfg.training.learning_rate,
-                weight_decay=cfg.training.weight_decay
-            )
+            trainer.optimizer = optimizer
             trainer.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            if scheduler is not None:
+                trainer.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
             logging.info(f"Resuming from epoch {trainer.start_epoch}")
         
-        trained_model, losses = trainer.train(model=model, bridge=bridge, dataset=train_dataset)
+        trained_model, trained_avg_model, losses = trainer.train(model=model, bridge=bridge, dataset=train_dataset, avg_model=avg_model)
     else:
         logging.info("Training already complete, loading model...")
         model.load_state_dict(checkpoint['model_state_dict'])
-        trained_model = model
+        if avg_model is not None:
+            avg_model.load_state_dict(checkpoint['avg_model_state_dict']) 
+        trained_model, trained_avg_model = model, avg_model
         losses = checkpoint['losses']
     
     # Save final model
     final_model_path = Path("final_model.pt")
     torch.save({
         'model_state_dict': trained_model.state_dict(),
+        'avg_model_state_dict': trained_avg_model.state_dict() if trained_avg_model else None,
         'config': OmegaConf.to_container(cfg, resolve=True),
         'losses': losses
     }, final_model_path)
@@ -185,7 +197,13 @@ def main(cfg: DictConfig) -> None:
         
         # Get n_steps from config or use default
         n_steps = cfg.get('n_steps', 10)
-        n_samples = min(cfg.get('n_samples', 10000), len(eval_dataset))
+        group_size = cfg['dataset'].get('group_size', None)
+        n_samples = cfg.get('n_samples', 10000)
+        dataset_size = len(eval_dataset)
+        if group_size is not None:
+            n_samples = min(n_samples // group_size, dataset_size // group_size)
+        else:
+            n_samples = min(n_samples, dataset_size)
         
         # Create training loss plot
         plots = {}
@@ -205,7 +223,7 @@ def main(cfg: DictConfig) -> None:
         
         # Run sampling evaluation
         eval_result = run_sampling_evaluation(
-            trained_model=trained_model,
+            trained_model=avg_model.module.to(device) if avg_model is not None else trained_model,
             bridge=bridge,
             dataset=eval_dataset,
             output_dir=output_dir,

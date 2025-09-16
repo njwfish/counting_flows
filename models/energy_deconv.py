@@ -52,9 +52,12 @@ def multinomial_counts_var_n(p: torch.Tensor, n: torch.Tensor) -> torch.Tensor:
     Returns:
       counts: [BATCH, K] integer tensor; row-sums equal n.
     """
-    eps = 1e-12
+    eps = 1e-6
     B, K = p.shape
-    p = p / (p.sum(dim=-1, keepdim=True).clamp_min(eps))
+    p_sum = p.sum(dim=-1, keepdim=True)
+    p = p / (p_sum.clamp_min(eps))
+    p = p.clamp_min(eps)
+    p = p / p.sum(dim=-1, keepdim=True)
 
     n = n.to(torch.long)
     n_max = int(n.max().item())

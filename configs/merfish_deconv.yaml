@@ -5,6 +5,8 @@ defaults:
   - architecture: uvit_multimodal
   - dataset: merfish_deconv
   - training: merfish_deconv
+  - averaging: ema
+  - optimizer: adam
   - slack_sampler: bessel
   - _self_
 

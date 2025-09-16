@@ -7,8 +7,9 @@ Simplified training loop that works with various bridges (CFM, counting flows, e
 import torch
 from torch.utils.data import DataLoader
 from pathlib import Path
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, Callable, Optional
 import logging
+from torch.optim.swa_utils import AveragedModel
 
 
 class Trainer:
@@ -30,7 +31,13 @@ class Trainer:
         save_every: Optional[int] = None,
         output_dir: Optional[str] = None,
         classifier_free_guidance_prob: float = 0.0,
-        save_intermediate_checkpoints: bool = False
+        target_sum_projection_prob: float = 0.0,
+        save_intermediate_checkpoints: bool = False, 
+        clip_grad_norm: Optional[float] = None,
+        collate_fn: Optional[Callable] = None,
+        optimizer: Optional[torch.optim.Optimizer] = None,
+        scheduler: Optional[torch.optim.lr_scheduler.LRScheduler] = None,
+        avg_model: Optional[torch.optim.swa_utils.AveragedModel] = None
     ):
         """
         Args:
@@ -56,12 +63,20 @@ class Trainer:
         self.save_every = save_every
         self.output_dir = Path(output_dir) if output_dir else None
         self.classifier_free_guidance_prob = classifier_free_guidance_prob
+        self.target_sum_projection_prob = target_sum_projection_prob
         # Training state
         self.losses = []
         self.start_epoch = 0
-        self.optimizer = None
+        self.optimizer = optimizer
+        # Scheduler
+        self.scheduler = scheduler
+        # Averaged Model
+        self.avg_model = avg_model
+        # Checkpointing
         self.save_intermediate_checkpoints = save_intermediate_checkpoints
-    
+        self.clip_grad_norm = clip_grad_norm
+        self.collate_fn = collate_fn
+
     def _create_dataloader(self, dataset):
         """Create DataLoader from dataset"""
         return DataLoader(
@@ -69,17 +84,20 @@ class Trainer:
             batch_size=self.batch_size,
             shuffle=self.shuffle,
             num_workers=self.num_workers,
-            pin_memory=torch.cuda.is_available()
+            pin_memory=torch.cuda.is_available(),
+            collate_fn=self.collate_fn
         )
     
-    def _save_checkpoint(self, model: torch.nn.Module, current_epoch: int) -> None:
+    def _save_checkpoint(self, model: torch.nn.Module, current_epoch: int, avg_model: Optional[torch.optim.swa_utils.AveragedModel] = None) -> None:
         """Save training checkpoint"""
         if self.output_dir is None:
             return
         
         checkpoint = {
             'model_state_dict': model.state_dict(),
+            'avg_model_state_dict': avg_model.state_dict() if avg_model is not None else None,
             'optimizer_state_dict': self.optimizer.state_dict(),
+            'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler is not None else None,
             'losses': self.losses,
             'current_epoch': current_epoch,
             'total_epochs': self.num_epochs
@@ -92,7 +110,7 @@ class Trainer:
             torch.save(checkpoint, checkpoint_path)
         logging.info(f"Checkpoint saved: {checkpoint_path}")
     
-    def training_step(self, model: torch.nn.Module, bridge: Any, batch: Dict[str, torch.Tensor]) -> float:
+    def training_step(self, model: torch.nn.Module, bridge: Any, batch: Dict[str, torch.Tensor], avg_model: Optional[torch.optim.swa_utils.AveragedModel] = None) -> float:
         """Execute a single training step"""
         # Extract data from batch
         if isinstance(batch['x_0'], dict):
@@ -121,20 +139,34 @@ class Trainer:
                     mask = torch.rand(inputs[key].shape[0]) < self.classifier_free_guidance_prob
                     inputs[key][mask] = 0
         
+        # add target sum projection for training a projection head
+        # this assumes that batches are "homogeneous" in the sense that there is only one target sum
+        if self.target_sum_projection_prob > 0:
+            if torch.rand(1) < self.target_sum_projection_prob:
+                inputs['target_sum'] = x_0.sum(dim=0, keepdim=True)
+
         # Training step
         self.optimizer.zero_grad()
         loss = model.loss(target, inputs)
         loss.backward()
+        if self.clip_grad_norm is not None:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=self.clip_grad_norm)
         self.optimizer.step()
+
+        if self.scheduler is not None:
+            self.scheduler.step()
+
+        if avg_model is not None:
+            avg_model.update_parameters(model)
         
         return loss.item()
     
-    def train_epoch(self, epoch: int, model: torch.nn.Module, bridge: Any, dataloader: DataLoader) -> float:
+    def train_epoch(self, epoch: int, model: torch.nn.Module, bridge: Any, dataloader: DataLoader, avg_model: Optional[torch.optim.swa_utils.AveragedModel] = None) -> float:
         """Train for one epoch"""
         epoch_losses = []
         
         for batch in dataloader:
-            batch_loss = self.training_step(model, bridge, batch)
+            batch_loss = self.training_step(model, bridge, batch, avg_model=avg_model)
             epoch_losses.append(batch_loss)
             self.losses.append(batch_loss)
         
@@ -145,7 +177,8 @@ class Trainer:
         model: torch.nn.Module,
         bridge: Any,
         dataset: Any,
-    ) -> Tuple[torch.nn.Module, list]:
+        avg_model: Optional[torch.optim.swa_utils.AveragedModel] = None
+    ) -> Tuple[torch.nn.Module, torch.optim.swa_utils.AveragedModel, list]:
         """
         Main training loop
         
@@ -159,13 +192,7 @@ class Trainer:
         """
         # Setup model and optimizer
         model = model.to(self.device)
-        if self.optimizer is None:
-            self.optimizer = torch.optim.Adam(
-                model.parameters(),
-                lr=self.learning_rate,
-                weight_decay=self.weight_decay
-            )
-        
+
         # Create dataloader from dataset
         dataloader = self._create_dataloader(dataset)
         
@@ -175,7 +202,7 @@ class Trainer:
         
         for epoch in range(self.start_epoch, self.num_epochs):
             model.train()
-            epoch_loss = self.train_epoch(epoch, model, bridge, dataloader)
+            epoch_loss = self.train_epoch(epoch, model, bridge, dataloader, avg_model=avg_model)
             
             # Print progress
             if (epoch + 1) % self.print_every == 0:
@@ -184,10 +211,10 @@ class Trainer:
             # Save checkpoint periodically
             if (self.save_every is not None and 
                 (epoch + 1) % self.save_every == 0):
-                self._save_checkpoint(model, epoch + 1)
+                self._save_checkpoint(model, epoch + 1, avg_model=avg_model)
         
         # Save final checkpoint
-        self._save_checkpoint(model, self.num_epochs)
+        self._save_checkpoint(model, self.num_epochs, avg_model=avg_model)
         
         logging.info("Training completed!")
-        return model, self.losses 
+        return model, avg_model, self.losses 

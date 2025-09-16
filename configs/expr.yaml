@@ -4,11 +4,13 @@ defaults:
   - architecture: scformer
   - dataset: exprbyseq
   - training: expr
+  - averaging: ema
+  - optimizer: adam
   - slack_sampler: bessel
   - _self_
 
 model:
-  m_samples: 8
+  m_samples: 6
 
 # Hydra configuration
 hydra:

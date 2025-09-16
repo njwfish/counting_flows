@@ -5,8 +5,7 @@ _target_: training_deconv.DeconvTrainer
 
 # Training parameters
 num_epochs: 5000
-learning_rate: 1e-3
-weight_decay: 0.0
+
 
 # Device and computation
 device: ${device}
@@ -14,7 +13,7 @@ device: ${device}
 # DataLoader parameters
 batch_size: 256
 shuffle: true
-num_workers: 0
+num_workers: 4
 
 # Logging and checkpointing
 print_every: 10

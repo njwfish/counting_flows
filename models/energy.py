@@ -99,6 +99,9 @@ class EnergyScoreLoss(nn.Module):
             if key == 'seq':
                 replicated_inputs[key] = value
                 continue
+            if key == 'target_sum':
+                replicated_inputs[key] = value.expand(self.m, -1)
+                continue
             replicated_inputs[key] = value.unsqueeze(1).expand(-1, self.m, *[-1] * (value.dim() - 1)).reshape(n * self.m, *value.shape[1:])
 
         # Add noise (energy score specific requirement)  

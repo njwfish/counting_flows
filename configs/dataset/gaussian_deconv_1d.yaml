@@ -2,6 +2,7 @@
 _target_: datasets.gaussian_deconv.DeconvolutionGaussianMixtureDataset
 
 # Dataset parameters
+size: 5000 
 base_size: 50000  # total samples in dataset (pre-sampled for speed)
 group_size: 10  # number of samples in each group
 data_dim: 1

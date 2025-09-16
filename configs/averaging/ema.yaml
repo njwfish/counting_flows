@@ -1,0 +1,4 @@
+_target_: torch.optim.swa_utils.AveragedModel
+multi_avg_fn:
+    _target_: torch.optim.swa_utils.get_ema_multi_avg_fn
+    decay: 0.999

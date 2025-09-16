@@ -161,7 +161,7 @@ def sparse_aggregation_collate_fn(batch: List[Dict[str, Any]], max_batch_size: O
     ).coalesce()
     
     # Add aggregation metadata
-    result['A'] = A_sparse
+    result['A'] = A_sparse.to_dense() # if A_sparse.shape[0] == 1 else A_sparse
     result['group_sizes'] = torch.tensor(group_sizes, dtype=torch.long)
     return result
 
@@ -208,7 +208,7 @@ class DeconvTrainer(Trainer):
             collate_fn=lambda x: sparse_aggregation_collate_fn(x, self.max_batch_size)
         )
 
-    def training_step(self, model: torch.nn.Module, bridge: Any, batch: Dict[str, torch.Tensor]) -> float:
+    def training_step(self, model: torch.nn.Module, bridge: Any, batch: Dict[str, torch.Tensor], avg_model: Optional[torch.optim.swa_utils.AveragedModel] = None) -> float:
         """Execute a single training step"""
         # Extract data from batch
         if isinstance(batch['x_0'], dict):
@@ -247,14 +247,23 @@ class DeconvTrainer(Trainer):
                     inputs[key][mask] = 0
         
         # Training step
+        # print(A.shape)
         self.optimizer.zero_grad()
         loss = model.loss(target, inputs, agg=A)
         loss.backward()
+        if self.clip_grad_norm is not None:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=self.clip_grad_norm)
         self.optimizer.step()
+
+        if avg_model is not None:
+            avg_model.update_parameters(model)
+
+        if self.scheduler is not None:
+            self.scheduler.step()
         
         return loss.item()
     
-    def train_epoch(self, epoch: int, model: torch.nn.Module, bridge: Any, dataloader: DataLoader) -> float:
+    def train_epoch(self, epoch: int, model: torch.nn.Module, bridge: Any, dataloader: DataLoader, avg_model: Optional[torch.optim.swa_utils.AveragedModel] = None) -> float:
         """Train for one epoch"""
         epoch_losses = []
 
@@ -262,6 +271,7 @@ class DeconvTrainer(Trainer):
         for batch in dataloader:
             # extract x_1 in multimodal and single modality cases
             model.eval()
+            avg_model.eval()
             with torch.no_grad():
                 if isinstance(batch['x_1'], dict):
                     x_1 = {}
@@ -302,14 +312,15 @@ class DeconvTrainer(Trainer):
 
                 # if multidimensional time and we have x_0 we should condition on the start time zero for the observed modalities
                 batch['x_0'] = bridge.sampler(
-                    x_1, context, model, 
+                    x_1, context, avg_model.module.to(self.device) if avg_model is not None else model, 
                     **sampler_kwargs
                 )
 
             # m step
             model.train()
+            avg_model.train()
             # sample time step
-            batch_loss = self.training_step(model, bridge, batch)
+            batch_loss = self.training_step(model, bridge, batch, avg_model=avg_model)
             epoch_losses.append(batch_loss)
             self.losses.append(batch_loss)
         
