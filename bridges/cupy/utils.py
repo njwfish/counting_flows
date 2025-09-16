@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 import cupy as cp
 from typing import Optional, Iterable
 
@@ -12,7 +13,7 @@ def dlpack_backend(*args, backend: str = "torch", dtype: Optional = None):
     if not isinstance(args, Iterable):
         args = (args,)
 
-    if isinstance(args[0], cp.ndarray):
+    if isinstance(args[0], np.ndarray):
         return tuple(from_numpy[backend](a) for a in args)
 
     if backend == "torch":
