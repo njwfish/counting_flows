@@ -59,19 +59,20 @@ def wasserstein_distance(X: np.ndarray, Y: np.ndarray) -> float:
     return float(np.mean(distances))
 
 
-def mmd_rbf(X: np.ndarray, Y: np.ndarray) -> float:
+def mmd_rbf(X: np.ndarray, Y: np.ndarray, gamma: float = 1.0, scale: float = 100.) -> float:
     """Maximum Mean Discrepancy with RBF kernel"""
     from scipy.spatial.distance import cdist
-    
-    gamma = 1.0 / X.shape[1]  # Scale by dimensionality
+
+    X = X / scale
+    Y = Y / scale
     
     XX = cdist(X, X, 'sqeuclidean')
     YY = cdist(Y, Y, 'sqeuclidean')
     XY = cdist(X, Y, 'sqeuclidean')
     
-    K_XX = np.exp(-gamma * XX)
-    K_YY = np.exp(-gamma * YY)
-    K_XY = np.exp(-gamma * XY)
+    K_XX = np.exp(- gamma * XX)
+    K_YY = np.exp(- gamma * YY)
+    K_XY = np.exp(- gamma * XY)
     
     mmd_squared = np.mean(K_XX) + np.mean(K_YY) - 2 * np.mean(K_XY)
     return float(max(0, mmd_squared) ** 0.5)
