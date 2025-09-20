@@ -52,7 +52,7 @@ double besselI_int(int d, double x) {
 
 extern "C" __global__
 void bessel_devroye(
-    const double * __restrict__ lam,    // αβ per element
+    const double * __restrict__ lam,    // alpha * beta per element
     const int    * __restrict__ d_arr,  // difference d per element
     unsigned long long seed,            // RNG seed
     int           n_samp,               // draws per element
