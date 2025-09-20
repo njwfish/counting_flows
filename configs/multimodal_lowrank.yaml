@@ -1,6 +1,6 @@
 # Multimodal Low-Rank Test Configuration
 defaults:
-  - bridge: multitime
+  - bridge: multimodal
   - model: energy_multimodal
   - architecture: uvit_multimodal_small
   - dataset: mnist_lowrank_gaussian_mixture

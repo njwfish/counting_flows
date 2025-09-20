@@ -83,6 +83,7 @@ class GaussianMixtureDataset(Dataset):
             # Sample means: k components, each with d-dimensional mean
             # Scale means proportionally to sqrt(d) to maintain reasonable scale
             mean_std = self.mean_scale / np.sqrt(self.data_dim)
+            print("mean_std", mean_std)
             means_source = torch.randn(self.k, self.data_dim) * mean_std + (self.min_value + self.value_range) / 2  
             means_target = torch.randn(self.k, self.data_dim) * mean_std + (self.min_value + self.value_range) / 2  
             

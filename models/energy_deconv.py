@@ -331,13 +331,16 @@ class DeconvolutionEnergyScoreLoss(EnergyScoreLoss):
             x_pred=x_pred,
             C=C,
             agg=agg
-        ) 
+        )
+
+        # print(y_float.float().var(dim=0))
 
         if return_float:
             return y_float
 
         # ----- 3) exact integerization across G per (B,D) -----
-        y_int = fully_vectorized_randomized_round_to_targets(torch.round(y_float), C.to(torch.int64), agg)
+        y_int = y_float.round().long() # fully_vectorized_randomized_round_to_targets(torch.round(y_float), C.to(torch.int64), agg)
+        # print(y_int.float().var(dim=0))
         return y_int
 
 

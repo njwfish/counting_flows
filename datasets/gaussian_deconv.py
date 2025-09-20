@@ -159,8 +159,94 @@ class DeconvolutionGaussianMixtureDataset(Dataset):
             'X_0': X_0.float()   # [data_dim] - sum of group members
         }
 
-
 class DeconvolutionMNISTGaussianMixtureDataset(DeconvolutionGaussianMixtureDataset):
+    """
+    Deconvolution dataset that combines MNIST images with Gaussian mixture data.
+    
+    This dataset extends DeconvolutionGaussianMixtureDataset by:
+    1. Using MNIST images selected based on mixture component assignments
+    2. Providing structured x_0/x_1 with both 'img' (MNIST) and 'counts' (Gaussian) components
+    3. Maintaining the same group-based structure for deconvolution
+    
+    Each item returns:
+      x_0: Dict with 'img' and 'counts' components [group_size, ...]
+      x_1: Dict with 'img' (noise) and 'counts' (Gaussian) [group_size, ...]
+      z: One-hot matrix indicating component for each group member [group_size, k]
+      X_0: Sum of Gaussian counts [data_dim]
+    """
+    
+    def __init__(
+        self,
+        **kwargs
+    ):
+        """
+        Args:
+            **kwargs: Arguments passed to parent DeconvolutionGaussianMixtureDataset
+        """
+        super().__init__(**kwargs)
+        
+        # Load MNIST dataset
+        self.mnist_dataset = DiffMNIST()
+        
+        # Group MNIST data by digit labels (0-9) to align with mixture components
+        self.mnist_by_digit = {}
+        for digit in range(10):
+            digit_indices = (self.mnist_dataset.labels == digit).nonzero(as_tuple=True)[0]
+            self.mnist_by_digit[digit] = digit_indices
+        
+        # Pre-compute MNIST selections for each group based on component assignments
+        self._pre_compute_mnist_selections()
+    
+    def _pre_compute_mnist_selections(self):
+        """Pre-compute MNIST image selections based on mixture component assignments"""
+        self.mnist_selections = torch.zeros(self.size, self.group_size, dtype=torch.long)
+        
+        # Vectorized MNIST selection
+        # Flatten all component assignments and convert to digits
+        all_component_assignments = self.group_component_info.flatten()  # [size * group_size]
+        all_digits = all_component_assignments % 10
+        
+        # Pre-allocate result tensor
+        all_selections = torch.zeros_like(all_component_assignments)
+        
+        # Process each digit (0-9) in batch
+        for digit in range(10):
+            # Find all positions that need this digit
+            digit_mask = (all_digits == digit)
+            n_needed = digit_mask.sum().item()
+            
+            if n_needed > 0:
+                # Get indices for this digit
+                digit_indices = self.mnist_by_digit[digit]
+                
+                # Randomly select n_needed indices (with replacement)
+                selected_indices = digit_indices[torch.randint(0, len(digit_indices), (n_needed,))]
+                
+                # Assign to the appropriate positions
+                all_selections[digit_mask] = selected_indices
+        
+        # Reshape back to [size, group_size]
+        self.mnist_selections = all_selections.reshape(self.size, self.group_size)
+    
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        # Get the base Gaussian mixture data
+        base_data = super().__getitem__(idx)
+        
+        # Get MNIST images for this group
+        mnist_indices = self.mnist_selections[idx]  # [group_size]
+        mnist_images = torch.stack([
+            self.mnist_dataset.data[idx] for idx in mnist_indices
+        ])  # [group_size, 1, 28, 28]
+        
+        # Structure the data with nested dictionaries
+        return {
+            'x_0': base_data['x_0'],        # [group_size, data_dim] 
+            'x_1': base_data['x_1'],        # [group_size, data_dim]
+            'img': mnist_images.float(),      # [group_size, 1, 28, 28]
+            'X_0': base_data['X_0']              # [data_dim] - sum of Gaussian counts only
+        }
+
+class DeconvolutionMNISTGaussianMultimodalMixtureDataset(DeconvolutionGaussianMixtureDataset):
     """
     Deconvolution dataset that combines MNIST images with Gaussian mixture data.
     

@@ -119,7 +119,7 @@ def load_experiment_data(metrics_path: Path) -> Dict[str, Any]:
             'model_type': safe_extract_target(config.get('model', {})),
             'seed': config.get('seed', 'unknown'),
             'dataset_hash': get_dataset_hash(config),
-            **training_params,  # Add n_epochs and n_steps
+            'optimizer_type': safe_extract_target(config.get('optimizer', {})) + '=' + str(config.get('optimizer', {}).get('lr', 'unknown')),
             **numeric_metrics   # Include only numeric computed metrics
         }
         
@@ -178,6 +178,7 @@ def create_summary_table(df: pd.DataFrame, output_path: str = "experiment_summar
         return
     
     # Select key columns for summary
+    print(df.columns)
     summary_cols = ['dataset_type', 'bridge_type', 'model_type', 'seed']
     metric_cols = [col for col in df.columns if col not in summary_cols + ['experiment_path']]
     
@@ -215,7 +216,7 @@ def compare_methods_for_dataset(df: pd.DataFrame, output_path: str = "method_com
         return
     
     # Define columns that identify unique model configurations (excluding seed)
-    config_cols = ['bridge_type', 'model_type', 'dataset_type']
+    config_cols = ['bridge_type', 'model_type', 'dataset_type', 'optimizer_type']
     if 'n_epochs' in df.columns:
         config_cols.append('n_epochs')
     if 'n_steps' in df.columns:
@@ -225,7 +226,7 @@ def compare_methods_for_dataset(df: pd.DataFrame, output_path: str = "method_com
     config_cols = [col for col in config_cols if col in df.columns]
     
     # Identify metric columns (numeric columns that aren't config or metadata)
-    metadata_cols = config_cols + ['seed', 'experiment_path', 'dataset_hash']
+    metadata_cols = config_cols + ['seed', 'experiment_path', 'dataset_hash', 'optimizer_type']
     metric_cols = [col for col in df.columns 
                    if col not in metadata_cols and df[col].dtype in ['float64', 'float32', 'int64', 'int32']]
     

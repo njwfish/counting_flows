@@ -185,9 +185,9 @@ class MultimodalDeconvolutionEnergyScoreLoss(MultimodalEnergyScoreLoss):
                 
                 if k == 'counts':
                     # Exact integerization 
-                    y = fully_vectorized_randomized_round_to_targets(
-                        torch.round(y), C.to(torch.int64), agg
-                    )
+                    y = y.round().long() # fully_vectorized_randomized_round_to_targets(
+                    #     torch.round(y), C.to(torch.int64), agg
+                    # )
                 
                 result[k] = y
             else:

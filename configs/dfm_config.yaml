@@ -6,7 +6,7 @@ defaults:
   - architecture/out_dim: discrete
   - dataset: low_rank_gaussian_mixture
   - training: default
-  - optimizer: adam
+  - optimizer: adam_big
   - scheduler: cosine
   - _self_
 

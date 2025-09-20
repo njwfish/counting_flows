@@ -86,6 +86,7 @@ def save_cached_evaluation(eval_data: Dict[str, Any], true_data: Dict[str, Any],
 def evaluate_model(model: torch.nn.Module, bridge: Any, dataset: Any, 
                   config_path: Optional[Path] = None, n_samples: int = 1000,
                   force_regenerate: bool = False, n_steps: int = 10,
+                  sum_conditioned: bool = False,
                   collate_fn: Optional[Callable] = None) -> Dict[str, Any]:
     """
     Smart evaluation dispatcher with caching and data type detection
@@ -114,7 +115,7 @@ def evaluate_model(model: torch.nn.Module, bridge: Any, dataset: Any,
     logging.info(f"Detected data type: {data_type}")
     
     # Generate evaluation data 
-    eval_data = generate_evaluation_data(model, bridge, dataset, n_samples, n_steps, collate_fn=collate_fn)
+    eval_data = generate_evaluation_data(model, bridge, dataset, n_samples, n_steps, sum_conditioned=sum_conditioned, collate_fn=collate_fn)
     
     # Generate true distribution data by sampling bridge directly
     true_data = generate_true_trajectory_data(bridge, dataset, n_samples, n_steps, collate_fn=collate_fn)
@@ -162,6 +163,7 @@ def generate_evaluation_data(
     dataset: Any, 
     n_samples: int = 1000, 
     n_steps: int = 10,
+    sum_conditioned: bool = False,
     collate_fn: Optional[Callable] = None
 ) -> Dict[str, np.ndarray]:
     """Generate evaluation data from trained model"""
@@ -186,10 +188,6 @@ def generate_evaluation_data(
         x0_torch = torch.tensor(x0_target).cuda()
         x1_torch = torch.tensor(x1_source).cuda()
     
-
-    
-    # Check if this is a mean constrained bridge
-    is_mean_constrained = isinstance(bridge, SkellamMeanConstrainedBridge)
     
     with torch.no_grad():
         # Prepare arguments for reverse sampler
@@ -200,14 +198,14 @@ def generate_evaluation_data(
             'return_trajectory': True,
             'return_x_hat': True,
         }
-        if 'z' in batch:
-            z = batch['z'].squeeze(0).numpy()# .reshape(-1, batch['z'].shape[-1])
-            sampler_kwargs['z'] = {'z': torch.tensor(z).cuda()}
+        # if 'z' in batch:
+        # z = batch['z'].squeeze(0).numpy()# .reshape(-1, batch['z'].shape[-1])
+        sampler_kwargs['z'] = {k: batch[k].squeeze(0).cuda() for k in batch if k not in ['x_0', 'x_1', 'X_0', 'group_sizes', 'A']}
         
         # Add target mean for mean constrained bridges
-        if is_mean_constrained:
-            mu_0 = x0_torch.float().mean(dim=0)
-            sampler_kwargs['mu_0'] = mu_0
+        if sum_conditioned:
+            sampler_kwargs['z']['target_sum'] = batch['X_0'].cuda()
+            sampler_kwargs['z']['A'] = batch['A'].cuda()
             logging.info("Using mean constrained bridge with target mean")
         
         # Add n_steps to sampler
@@ -228,6 +226,10 @@ def generate_evaluation_data(
         'x1_batch': x1_source,
         'x0_generated': x0_generated,
     }
+
+    if sum_conditioned:
+        result_dict['target_sum'] = batch['X_0'].numpy()
+        result_dict['A'] = batch['A'].numpy()
     
     # Only include trajectories if they exist
     if x_trajectory is not None:

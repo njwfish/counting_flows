@@ -56,7 +56,7 @@ def get_model_hash(cfg: DictConfig, excluded_params: Optional[List[str]] = None)
         # Runtime parameters  
         'device', 'create_plots',
         # Sampling parameters
-        'n_steps', 'n_samples'
+        'n_steps', 'n_samples', 'sum_conditioned'
     ] + excluded_params
     
     for param in excluded_params:

@@ -197,6 +197,7 @@ def main(cfg: DictConfig) -> None:
         
         # Get n_steps from config or use default
         n_steps = cfg.get('n_steps', 10)
+        sum_conditioned = cfg.get('sum_conditioned', False)
         group_size = cfg['dataset'].get('group_size', None)
         n_samples = cfg.get('n_samples', 10000)
         dataset_size = len(eval_dataset)
@@ -230,6 +231,7 @@ def main(cfg: DictConfig) -> None:
             n_steps=n_steps,
             n_samples=n_samples,
             n_epochs=cfg.training.num_epochs,
+            sum_conditioned=sum_conditioned,
             collate_fn=collate_fn
         )
     

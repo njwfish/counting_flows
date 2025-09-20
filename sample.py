@@ -29,6 +29,7 @@ def run_sampling_evaluation(
     n_steps: int = 10,
     n_samples: int = 10000,
     n_epochs: Optional[int] = None,
+    sum_conditioned: bool = False,
     collate_fn: Optional[Callable] = None
 ) -> Dict[str, Any]:
     """
@@ -46,9 +47,12 @@ def run_sampling_evaluation(
         Dictionary with evaluation results
     """
     logging.info(f"Running sampling evaluation with {n_steps} steps...")
-    
+    results_dir = output_dir
+    if sum_conditioned:
+        results_dir = results_dir / "sum_conditioned"
+        results_dir.mkdir(exist_ok=True)
     # Create results directory for this n_steps
-    results_dir = output_dir / f"n_steps={n_steps},n_epochs={n_epochs}"
+    results_dir = results_dir / f"n_steps={n_steps},n_epochs={n_epochs}"
     results_dir.mkdir(exist_ok=True)
     
     # Run evaluation
@@ -59,6 +63,7 @@ def run_sampling_evaluation(
         config_path=results_dir / "config.yaml",
         n_samples=n_samples,
         n_steps=n_steps,
+        sum_conditioned=sum_conditioned,
         collate_fn=collate_fn
     )
     
