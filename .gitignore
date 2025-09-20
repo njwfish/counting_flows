@@ -2,3 +2,5 @@
 *.o
 *.cpp
 *.so
+data/*.gtf
+data/*.fa
