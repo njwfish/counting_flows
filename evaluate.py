@@ -87,6 +87,7 @@ def evaluate_model(model: torch.nn.Module, bridge: Any, dataset: Any,
                   config_path: Optional[Path] = None, n_samples: int = 1000,
                   force_regenerate: bool = False, n_steps: int = 10,
                   sum_conditioned: bool = False,
+                  condition_on_end_time: bool = False,
                   collate_fn: Optional[Callable] = None) -> Dict[str, Any]:
     """
     Smart evaluation dispatcher with caching and data type detection
@@ -115,10 +116,10 @@ def evaluate_model(model: torch.nn.Module, bridge: Any, dataset: Any,
     logging.info(f"Detected data type: {data_type}")
     
     # Generate evaluation data 
-    eval_data = generate_evaluation_data(model, bridge, dataset, n_samples, n_steps, sum_conditioned=sum_conditioned, collate_fn=collate_fn)
+    eval_data = generate_evaluation_data(model, bridge, dataset, n_samples, n_steps, sum_conditioned=sum_conditioned, condition_on_end_time=condition_on_end_time, collate_fn=collate_fn)
     
     # Generate true distribution data by sampling bridge directly
-    true_data = generate_true_trajectory_data(bridge, dataset, n_samples, n_steps, collate_fn=collate_fn)
+    true_data = generate_true_trajectory_data(bridge, dataset, n_samples, n_steps, condition_on_end_time=condition_on_end_time, collate_fn=collate_fn)
     
     # Compute evaluation metrics
     metrics = compute_evaluation_metrics(eval_data)
@@ -164,6 +165,7 @@ def generate_evaluation_data(
     n_samples: int = 1000, 
     n_steps: int = 10,
     sum_conditioned: bool = False,
+    condition_on_end_time: bool = False,
     collate_fn: Optional[Callable] = None
 ) -> Dict[str, np.ndarray]:
     """Generate evaluation data from trained model"""
@@ -204,8 +206,27 @@ def generate_evaluation_data(
         
         # Add target mean for mean constrained bridges
         if sum_conditioned:
-            sampler_kwargs['z']['target_sum'] = batch['X_0'].cuda()
+            batch_X_0 = batch['X_0']
+            if isinstance(batch_X_0, dict):
+                batch_X_0 = {k: batch_X_0[k].squeeze(0).cuda() for k in batch_X_0}
+            else:
+                batch_X_0 = batch_X_0.squeeze(0).cuda()
+            sampler_kwargs['z']['target_sum'] = batch_X_0
             sampler_kwargs['z']['A'] = batch['A'].cuda()
+            if isinstance(batch['x_0'], dict) and 'X_0' in batch:
+                # this lets us condition on x_0 if it is provided (and not in X_0)
+                # using the fact that the model "samples" from x_0 if x_0 is provided, e.g. "conditional" sampling
+                # across modalities 
+                context_x_0 = {}
+                for k in batch['x_0']:
+                    if k not in batch['X_0']:
+                        context_x_0[k] = batch['x_0'][k].cuda()
+
+                sampler_kwargs['z']['x_0'] = context_x_0
+
+                if condition_on_end_time:
+                    sampler_kwargs['start_times'] = {k: 0.0 for k in context_x_0}
+                    sampler_kwargs['x_start_time'] = {k: context_x_0[k] for k in context_x_0}
             logging.info("Using mean constrained bridge with target mean")
         
         # Add n_steps to sampler
@@ -284,7 +305,7 @@ def compute_evaluation_metrics(eval_data: Dict[str, np.ndarray]) -> Dict[str, fl
     return metrics
 
 
-def generate_true_trajectory_data(bridge: Any, dataset: Any, n_samples: int = 1000, n_steps: int = 10, collate_fn: Optional[Callable] = None) -> Dict[str, np.ndarray]:
+def generate_true_trajectory_data(bridge: Any, dataset: Any, n_samples: int = 1000, n_steps: int = 10, condition_on_end_time: bool = False, collate_fn: Optional[Callable] = None) -> Dict[str, np.ndarray]:
     """
     Generate true trajectory data by sampling bridge directly at each time step.
     This is completely bridge-agnostic and doesn't require any dummy models.

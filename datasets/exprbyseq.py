@@ -1,6 +1,7 @@
 import snapatac2_scooby as snap
 import numpy as np
 from pyfaidx import Fasta
+import pyranges as pr
 from scipy.sparse import csr_matrix, coo_matrix
 from typing import Union, List, Tuple
 
@@ -29,8 +30,9 @@ class ExprBySeq:
     
     def __init__(
         self, 
-        snapfile =  "/orcd/data/omarabu/001/gokul/count_sequence/training_data/onek1k_training_data/snapatac_merged_minus.h5ad",
+        snapfile =  "/orcd/data/omarabu/001/gokul/count_sequence/training_data/onek1k_training_data/snapatac_merged_minus2.h5ad",
         fastafile = "/orcd/data/omarabu/001/gokul/count_sequence/training_data/scooby_training_data/genome_human.fa",
+        gtffile = "/orcd/data/omarabu/001/gokul/counting_flows/data/gencode.v43.annotation.gtf",
         cell_type_col = 'cell_label',
         individual_col = 'individual',
         base_individual = '650_651',
@@ -47,6 +49,9 @@ class ExprBySeq:
         self.chrom_lens = np.array(self.sd.uns['reference_sequences']['reference_seq_length'])
         self.chrom_names = self.sd.uns['reference_sequences']['reference_seq_name']
         self.chrom_starts = np.hstack(([0], self.chrom_lens.cumsum()[:-1]))
+
+        self.annotations = pr.read_gtf(gtffile)
+        self.genes = self.annotations[self.annotations.Feature == 'gene'].as_df()
 
         self.chrom_weights = (self.chrom_lens - window_size) / (self.chrom_lens - window_size).sum()
 
@@ -125,8 +130,8 @@ class ExprBySeq:
         target_counts = self.fragment_matrix[target_cell_idxs][:, target_start:target_end].toarray()
 
         return {
-            'x_0': target_counts,
-            'x_1': base_counts,
+            'x_0': -target_counts,
+            'x_1': -base_counts,
             'seq': seq,
             'class_emb': self.target_cond[target_cell_idxs]
         }

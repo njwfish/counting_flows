@@ -232,6 +232,7 @@ def main(cfg: DictConfig) -> None:
             n_samples=n_samples,
             n_epochs=cfg.training.num_epochs,
             sum_conditioned=sum_conditioned,
+            condition_on_end_time=cfg.training.get('condition_on_end_time', False),
             collate_fn=collate_fn
         )
     

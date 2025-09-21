@@ -30,6 +30,7 @@ def run_sampling_evaluation(
     n_samples: int = 10000,
     n_epochs: Optional[int] = None,
     sum_conditioned: bool = False,
+    condition_on_end_time: bool = False,
     collate_fn: Optional[Callable] = None
 ) -> Dict[str, Any]:
     """
@@ -64,6 +65,7 @@ def run_sampling_evaluation(
         n_samples=n_samples,
         n_steps=n_steps,
         sum_conditioned=sum_conditioned,
+        condition_on_end_time=condition_on_end_time,
         collate_fn=collate_fn
     )
     

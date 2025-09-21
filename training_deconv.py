@@ -165,6 +165,48 @@ def sparse_aggregation_collate_fn(batch: List[Dict[str, Any]], max_batch_size: O
     result['group_sizes'] = torch.tensor(group_sizes, dtype=torch.long)
     return result
 
+def deconv_sample_batch(
+    batch: Dict[str, Any], 
+    device: str="cuda", 
+    condition_on_end_time: bool=False
+) -> Dict[str, Any]:
+    if isinstance(batch['x_1'], dict):
+        x_1 = {}
+        for k in batch['x_1']:
+            x_1[k] = batch['x_1'][k].to(device)
+    else:
+        x_1 = batch['x_1'].to(device)
+    
+    if isinstance(batch['X_0'], dict):
+        for k in batch['X_0']:
+            batch['X_0'][k] = batch['X_0'][k].to(device)
+    else:
+        batch['X_0'] = batch['X_0'].to(device)
+    
+    context = {'target_sum': batch['X_0']}
+    for key in batch:
+        if key not in ['x_1', 'x_0', 'X_0', 'group_sizes']:
+            batch[key] = batch[key].to(device)
+            context[key] = batch[key].to(device)
+
+    if isinstance(batch['x_0'], dict):
+        # this lets us condition on x_0 if it is provided (and not in X_0)
+        # using the fact that the model "samples" from x_0 if x_0 is provided, e.g. "conditional" sampling
+        # across modalities 
+        context_x_0 = {}
+        for k in batch['x_0']:
+            if k not in batch['X_0']:
+                context_x_0[k] = batch['x_0'][k].to(device)
+
+        context['x_0'] = context_x_0
+
+    sampler_kwargs = {
+            'start_times': {k: 0.0 for k in context['x_0']},
+            'x_start_time': {k: context['x_0'][k] for k in context['x_0']}
+    } if condition_on_end_time else {}
+
+    return x_1, context, sampler_kwargs
+
 
 class DeconvTrainer(Trainer):
     """
@@ -273,42 +315,7 @@ class DeconvTrainer(Trainer):
             model.eval()
             avg_model.eval()
             with torch.no_grad():
-                if isinstance(batch['x_1'], dict):
-                    x_1 = {}
-                    for k in batch['x_1']:
-                        x_1[k] = batch['x_1'][k].to(self.device)
-                else:
-                    x_1 = batch['x_1'].to(self.device)
-                
-                if isinstance(batch['X_0'], dict):
-                    for k in batch['X_0']:
-                        batch['X_0'][k] = batch['X_0'][k].to(self.device)
-                else:
-                    batch['X_0'] = batch['X_0'].to(self.device)
-                
-                context = {'target_sum': batch['X_0']}
-                for key in batch:
-                    if key not in ['x_1', 'x_0', 'X_0', 'group_sizes']:
-                        batch[key] = batch[key].to(self.device)
-                        context[key] = batch[key].to(self.device)
-
-                if isinstance(batch['x_0'], dict):
-                    # this lets us condition on x_0 if it is provided (and not in X_0)
-                    # using the fact that the model "samples" from x_0 if x_0 is provided, e.g. "conditional" sampling
-                    # across modalities 
-                    context_x_0 = {}
-                    for k in batch['x_0']:
-                        if k not in batch['X_0']:
-                            context_x_0[k] = batch['x_0'][k].to(self.device)
-
-                    context['x_0'] = context_x_0
-                
-
-                sampler_kwargs = {
-                        'start_times': {k: 0.0 for k in context['x_0']},
-                        'x_start_time': {k: context['x_0'][k] for k in context['x_0']}
-                } if self.condition_on_end_time else {}
-
+                x_1, context, sampler_kwargs = deconv_sample_batch(batch, self.device, self.condition_on_end_time)
 
                 # if multidimensional time and we have x_0 we should condition on the start time zero for the observed modalities
                 batch['x_0'] = bridge.sampler(
