@@ -309,8 +309,9 @@ class DeconvTrainer(Trainer):
         """Train for one epoch"""
         epoch_losses = []
 
+        from tqdm import tqdm
         # e step
-        for batch in dataloader:
+        for batch in tqdm(dataloader):
             # extract x_1 in multimodal and single modality cases
             model.eval()
             avg_model.eval()

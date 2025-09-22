@@ -128,6 +128,8 @@ def main(cfg: DictConfig) -> None:
     bridge = hydra.utils.instantiate(cfg.bridge)
     dataset = hydra.utils.instantiate(cfg.dataset)
     model = hydra.utils.instantiate(cfg.model)
+
+    print(model)
     
     # Create train/eval split
     train_split = cfg.get('train_split', 0.8)  # Default 80% train, 20% eval
