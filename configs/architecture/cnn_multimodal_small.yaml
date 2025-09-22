@@ -1,0 +1,21 @@
+# CNN Count Diffusion Model Configuration - Small Version  
+_target_: architecture.cnn_multimodal.CNNCountDiffusion
+
+# Image parameters
+img_size: 28
+in_channels: 1
+
+# Count parameters  
+count_dim: ${dataset.data_dim}
+
+# Noise parameters
+noise_dim: ${model.noise_dim}
+
+# Architecture parameters - reduced for smaller model
+base_channels: 32
+channel_multipliers: [1, 2, 4, 8]
+num_res_blocks: 2
+time_embed_dim: 512
+
+# Training parameters
+dropout: 0.1

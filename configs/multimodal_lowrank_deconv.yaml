@@ -2,7 +2,7 @@
 defaults:
   - bridge: skellam
   - model: energy_score_deconv
-  - architecture: uvit_multimodal_small
+  - architecture: cnn_multimodal_small
   - dataset: gaussian_deconv_mnist
   - training: multimodal_deconv
   - averaging: ema
