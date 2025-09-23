@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .energy_multimodal import MultimodalEnergyScoreLoss
-from .energy_deconv import rescale, fully_vectorized_randomized_round_to_targets
+from .energy_deconv import rescale, randomized_round_groups_exact
 
 
 class MultimodalDeconvolutionEnergyScoreLoss(MultimodalEnergyScoreLoss):
@@ -178,16 +178,17 @@ class MultimodalDeconvolutionEnergyScoreLoss(MultimodalEnergyScoreLoss):
                 # KL/I-projection onto aggregation constraints
                 C = target_sum[k].to(device)  # [G, D]
                 y = rescale(
-                    x_pred=predictions[k],
+                    x=predictions[k],
                     C=C,
-                    agg=agg
+                    A=agg
                 )
                 
                 if k == 'counts':
                     # Exact integerization 
-                    y = fully_vectorized_randomized_round_to_targets(
-                        torch.round(y), C.to(torch.int64), agg
+                    y_post = randomized_round_groups_exact(
+                        y, C, agg
                     )
+                    y = y_post.long()
                 
                 result[k] = y
             else:

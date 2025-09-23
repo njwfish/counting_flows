@@ -2,4 +2,4 @@
 _target_: bridges.torch.cfm.CFMBridge
 
 # Bridge parameters
-sigma: 0.1
+sigma: 0.1 

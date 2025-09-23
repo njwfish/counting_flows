@@ -1,4 +1,4 @@
 _target_: datasets.exprbyseq.ExprBySeq
 window_size: 196608
-batch_size: 64
+batch_size: 128
 min_value: 0

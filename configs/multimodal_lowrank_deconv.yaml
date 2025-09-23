@@ -1,7 +1,7 @@
 # Multimodal Low-Rank Test Configuration
 defaults:
-  - bridge: multitime
-  - model: energy_multimodal_deconv
+  - bridge: skellam
+  - model: energy_score_deconv
   - architecture: uvit_multimodal_small
   - dataset: gaussian_deconv_mnist
   - training: multimodal_deconv

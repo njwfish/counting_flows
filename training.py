@@ -164,8 +164,8 @@ class Trainer:
     def train_epoch(self, epoch: int, model: torch.nn.Module, bridge: Any, dataloader: DataLoader, avg_model: Optional[torch.optim.swa_utils.AveragedModel] = None) -> float:
         """Train for one epoch"""
         epoch_losses = []
-        
-        for batch in dataloader:
+        from tqdm import tqdm
+        for batch in tqdm(dataloader):
             batch_loss = self.training_step(model, bridge, batch, avg_model=avg_model)
             epoch_losses.append(batch_loss)
             self.losses.append(batch_loss)

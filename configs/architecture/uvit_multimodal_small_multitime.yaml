@@ -6,8 +6,6 @@ img_size: 28
 patch_size: 4
 in_chans: 1
 
-time_dim: 1
-
 # Count parameters
 count_dim: ${dataset.data_dim}  # Will be overridden by dataset.data_dim
 num_count_patches: 4

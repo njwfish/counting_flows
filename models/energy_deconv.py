@@ -4,111 +4,108 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 
-
 from .energy import EnergyScoreLoss
 
 @torch.no_grad()
 def rescale(
-    x_pred: torch.Tensor,           # [B, D] >=0 prior (e.g., softplus(logits))
-    C: torch.Tensor,                # [G, D] target aggregates across G
-    agg: torch.Tensor,              # [G, B] aggregation matrix (sparse or dense)
-):
+    x: torch.Tensor,        # [B, D] >= 0
+    C: torch.Tensor,        # [G, D] >= 0
+    A: torch.Tensor,        # [G, B] 0/1, exactly one 1 per column
+) -> torch.Tensor:
     """
-    KL/I-projection y = argmin_{y>=0, sum_g y=C}
-    
-    Implements element-wise rescaling: x[i,d] * C[g,d] / sum_group(x[:,d])
-    where g is the group that element i belongs to.
-
-    Returns: y [B, D] nonnegative with exact column totals.
+    If (A @ x)[g,d] > 0:  y[b,d] = x[b,d] * C[g,d] / (A@x)[g,d]  for b in group g
+    If (A @ x)[g,d] = 0:  y[b,d] = C[g,d] / |g|                   uniformly for b in g
+    Guarantees (A @ y) == C (up to fp), y >= 0. Fully vectorized.
     """
-    B, D = x_pred.shape
-    G = C.shape[0]
-    dev = x_pred.device
-    dtype = x_pred.dtype
+    # Dense view for argmax/gather; sparse (coalesced) is fine for matmul
+    if getattr(A, "is_sparse", False):
+        A_sp = A.coalesce().to(torch.float32)
+        A_dense = A_sp.to_dense()
+    else:
+        A_sp = A.to(torch.float32)
+        A_dense = A.to(torch.float32)
 
-    group_sums = agg @ x_pred  # [G, D]
-    
-    # Handle zero columns by setting them to 1 (avoid division by zero)
-    group_sums = torch.where(group_sums == 0, torch.ones_like(group_sums), group_sums)
-    
-    # Compute scaling factors: C[g,d] / group_sums[g,d] for each group
-    scale_factors = C / group_sums  # [G, D]
-    
-    agg_t = agg.t()  # [B, G]
-    element_scales = agg_t @ scale_factors  # [B, D]
-    
-    # Apply element-wise rescaling
-    y = x_pred * element_scales  # [B, D]
-    
-    return y
+    # Sanity checks for disjointness
+    assert torch.all((A_dense == 0) | (A_dense == 1)), "A must be 0/1."
+    assert torch.all(A_dense.sum(dim=0) == 1), "Each item must belong to exactly one group."
+
+    B, D = x.shape
+    G, B2 = A_dense.shape
+    assert B2 == B and C.shape == (G, D)
+
+    x64 = x.to(torch.float32)
+    C64 = C.to(torch.float32)
+
+    # Group ids and sizes
+    gid = A_dense.argmax(dim=0)                       # [B]
+    sizes = A_dense.sum(dim=1).to(torch.float32)      # [G]
+    if torch.any((sizes == 0) & (C64.sum(dim=1) != 0)):
+        raise ValueError("Group with zero members has positive target in C.")
+
+    # Group sums per (g,d)
+    Ax = (A_sp @ x64) if getattr(A, "is_sparse", False) else (A_dense @ x64)  # [G, D]
+
+    # Positive / zero masks
+    pos  = Ax > 0.5
+    zero = ~pos
+
+    # Scale factors for positive (g,d)
+    scale = torch.zeros_like(C64)
+    scale[pos] = C64[pos] / Ax[pos]                   # [G, D]
+
+    # Gather each row's group scale (don’t sum across groups)
+    y = (x64 * scale[gid])                            # [B, D]
+
+    # Uniform fallback for zero groups: share[g,d] = C[g,d] / |g|
+    if torch.any(zero):
+        # Broadcast sizes to (G,D), divide everywhere, then mask to only zero cells
+        safe_sizes = torch.where(sizes > 0, sizes, torch.ones_like(sizes))    # [G]
+        share = (C64 / safe_sizes[:, None]) * zero.to(C64.dtype)              # [G, D]
+        # Distribute to members via A^T
+        y += (A_dense.t() @ share)                                            # [B, D]
+
+    return y.to(x.dtype)
 
 @torch.no_grad()
-def multinomial_counts_var_n(p: torch.Tensor, n: torch.Tensor) -> torch.Tensor:
-    """
-    Vectorized Multinomial sampler with varying totals.
-    Args:
-      p: [BATCH, K] nonnegative; will be renormalized along dim=-1.
-      n: [BATCH] nonnegative integers (total counts per row).
-    Returns:
-      counts: [BATCH, K] integer tensor; row-sums equal n.
-    """
-    eps = 1e-6
-    B, K = p.shape
-    p_sum = p.sum(dim=-1, keepdim=True)
-    p = p / (p_sum.clamp_min(eps))
-    p = p.clamp_min(eps)
-    p = p / p.sum(dim=-1, keepdim=True)
-
-    n = n.to(torch.long)
-    n_max = int(n.max().item())
-    if n_max == 0:
-        return torch.zeros(B, K, device=p.device, dtype=torch.long)
-
-    # Draw n_max categorical samples per row (with replacement)
-    idx = torch.multinomial(p, num_samples=n_max, replacement=True)  # [B, n_max]
-
-    # Mask out positions beyond each row's n[b]
-    pos = torch.arange(n_max, device=p.device).unsqueeze(0)          # [1, n_max]
-    mask = (pos < n.unsqueeze(1)).to(p.dtype)                        # [B, n_max], 1.0 where kept
-
-    # Scatter-add masked 1s into K bins -> exact integer counts
-    counts = torch.zeros(B, K, device=p.device, dtype=p.dtype)
-    counts = counts.scatter_add(1, idx, mask)                        # [B, K], float
-
-    return counts.round().to(torch.long)
-
-
-def multinomial_match_groups_torch(
-    X: torch.Tensor,             # [B, D], nonnegative counts
-    C: torch.Tensor,             # [G, D], target group totals
-    group_id: torch.Tensor=None, # [B], int64 in [0..G-1]
-    A: torch.Tensor=None,        # [G, B] 0/1 disjoint membership (optional)
+def randomized_round_groups_exact(
+    X: torch.Tensor,         # [B, D] nonnegative floats, already scaled so group-sums match C
+    C: torch.Tensor,         # [G, D] integer targets (exact group sums)
+    A: torch.Tensor,         # [G, B] 0/1 disjoint membership matrix (one 1 per column)
     eps: float = 1e-12,
-):
+) -> torch.Tensor:
     """
-    Samples Y [B, D] so that group-sums match C exactly, distributing each C[g,d]
-    across members b in group g proportional to X[b,d] (uniform if that col is all-zero).
-    No Python loop over K; uses one torch.multinomial + scatter_add per flattened (g,d) batch.
-    """
-    assert (group_id is not None) ^ (A is not None), "Provide exactly one of group_id or A."
-    B, D = X.shape
-    device = X.device
-    if A is not None:
-        group_id = A.argmax(dim=0)
-        G = A.shape[0]
-    else:
-        G = C.shape[0]
-    assert C.shape == (G, D)
+    Integer rounding with exact group targets and ||Y - X||_inf <= 1.
+    For each (g,d), choose S[g,d] = C[g,d] - sum_b floor(X[b,d]) members (without replacement)
+    with probabilities proportional to frac(X[b,d]); add +1 to those entries.
 
-    # Group-sort to make ragged groups contiguous
-    order = torch.argsort(group_id)
+    Assumes: A is 0/1 with columns summing to 1 (disjoint membership);
+             C is integer & nonnegative; X is nonnegative and sums per (g,d) match C exactly.
+    """
+
+    device = X.device
+    B, D = X.shape
+    G, B2 = A.shape
+    assert B2 == B, "A must be [G, B] matching X's batch size"
+    assert torch.all((A == 0) | (A == 1)), "A must be 0/1"
+    assert torch.all(A.sum(dim=0) == 1), "Each item must belong to exactly one group"
+    assert torch.all(C >= 0)
+    # (Optional) strict integer check for C:
+    assert torch.allclose(C, C.round()), "C must be integer-valued"
+
+    # Derive group ids and sizes; sort by group to make ragged groups contiguous
+    group_id = A.argmax(dim=0)                          # [B]
+    order = torch.argsort(group_id)                     # [B]
     inv_order = torch.empty_like(order); inv_order[order] = torch.arange(B, device=device)
-    gid_sorted = group_id[order]       # [B]
-    X_sorted  = X[order]               # [B, D]
-    sizes = torch.bincount(gid_sorted, minlength=G)  # [G]
+    gid_sorted = group_id[order]                        # [B]
+    X_sorted  = X[order]                                # [B, D]
+    sizes = torch.bincount(gid_sorted, minlength=G)     # [G]
     max_K = int(sizes.max().item())
 
-    # Compute position within group (0..size_g-1) without loops
+    # Guard: empty group cannot have positive target
+    if torch.any((sizes == 0) & (C.sum(dim=1) > 0)):
+        raise ValueError("Empty group with positive targets in C.")
+
+    # Compute position within group (0..size_g-1)
     offsets = torch.zeros(G+1, device=device, dtype=torch.long)
     offsets[1:] = torch.cumsum(sizes, dim=0)
     pos_within = torch.arange(B, device=device) - offsets[gid_sorted]
@@ -116,82 +113,56 @@ def multinomial_match_groups_torch(
     # Pad to [G, max_K, D]
     X_pad = X_sorted.new_zeros((G, max_K, D))
     X_pad[gid_sorted, pos_within, :] = X_sorted
+    K_mask = (torch.arange(max_K, device=device)[None, :] < sizes[:, None])   # [G, max_K]
 
-    # Build probs across members for each (g,d)
-    denom = X_pad.sum(dim=1, keepdim=True)                      # [G, 1, D]
-    P = torch.where(denom > 0, X_pad / (denom + eps), X_pad)    # temp; zero cols fixed below
+    # Integer/fractional parts
+    X_floor = torch.floor(X_pad)                           # [G, max_K, D]
+    frac    = (X_pad - X_floor).clamp_min(0.0)            # [G, max_K, D]
+    frac = frac * K_mask[:, :, None]                      # zero out padding
 
-    # Uniform fallback where the entire (g,d) is zero within the group
-    zero_mask = (denom.squeeze(1) == 0)                         # [G, D]
-    K_mask = (torch.arange(max_K, device=device)[None, :] < sizes[:, None])  # [G, max_K]
-    size_f = sizes.clamp_min(1).to(P.dtype).view(G, 1, 1)
-    uniform = K_mask.to(P.dtype)[:, None, :] / size_f           # [G, 1, max_K]
-    P = P.permute(0, 2, 1)                                      # [G, D, max_K]
-    P = torch.where(zero_mask[:, :, None], uniform.expand(G, D, max_K), P)
+    # Required number of +1 per (g,d): S = C - sum floor(X)
+    floor_sums = X_floor.sum(dim=1)                       # [G, D]
+    S = (C.to(X.dtype) - floor_sums).round().long()  # [G, D], should be integral already
+    if torch.any(S < 0):
+        raise ValueError("Negative S encountered; X not consistent with C?")
+    if torch.any(S > sizes[:, None]):
+        raise ValueError("S exceeds group size; check X/C consistency.")
 
-    # Flatten batch: [G*D, max_K]
-    P_flat = P.reshape(-1, max_K)
-    n_flat = C.reshape(-1).to(torch.long)
+    # If S[g,d] == 0, nothing to add; if all frac==0 then S must be 0 by consistency.
 
-    # Sample counts per (g,d) across group members
-    counts_flat = multinomial_counts_var_n(P_flat, n_flat)      # [G*D, max_K]
+    # Weighted sampling WITHOUT replacement via Gumbel-Top-k, vectorized across all (g,d).
+    # scores = log(frac) + Gumbel(0,1); take top S[g,d] indices.
+    tiny = eps
+    # logits: -inf where frac==0 or padding
+    logits = torch.where(frac > 0, torch.log(frac + tiny), frac.new_full((), float('-inf')))
+    # Gumbel noise
+    U = torch.rand_like(logits, dtype=logits.dtype)
+    gumbel = -torch.log(-torch.log(U.clamp_min(tiny)))
+    scores = logits + gumbel
 
-    # Reshape back to [G, max_K, D], mask padded members
-    alloc = counts_flat.view(G, D, max_K).permute(0, 2, 1)      # [G, max_K, D]
-    alloc = alloc * K_mask[:, :, None].to(alloc.dtype)
+    # Get descending order along the member axis
+    # ord: [G, max_K, D] giving permutation of member indices for each (g,d)
+    ord = torch.argsort(scores, dim=1, descending=True)
 
-    # Unpad back to [B, D] in grouped order, then unsort to original order
-    alloc_flat = alloc.reshape(G * max_K, D)
-    flat_mask = K_mask.reshape(G * max_K)
-    Y_grouped = alloc_flat[flat_mask]                           # [B, D]
-    Y = torch.empty_like(X, dtype=alloc.dtype)
-    Y[order] = Y_grouped
+    # Compute rank (0 is best) for each member
+    ranks = torch.empty_like(ord, dtype=torch.long)
+    arange_idx = torch.arange(max_K, device=device).view(1, max_K, 1).expand(G, max_K, D)
+    ranks.scatter_(1, ord, arange_idx)  # ranks[g, member, d] = position in sorted order
 
-    # Ensure integer dtype
-    return Y.to(torch.long)
+    # Select top S[g,d] members: mask where rank < S[g,d]
+    select_mask = ranks < S[:, None, :]                  # [G, max_K, D], bool
+    select_mask = select_mask & K_mask[:, :, None]       # keep only real members
 
+    # Build Y: floor + 1 on selected entries
+    Y_pad = X_floor + select_mask.to(X_floor.dtype)
 
-@torch.no_grad()
-def fully_vectorized_randomized_round_to_targets(
-    x_float: torch.Tensor,           # [B, D] nonnegative floats
-    C: torch.Tensor,                 # [G, D] target integer sums 
-    agg: torch.Tensor,               # [G, B] aggregation matrix (sparse or dense)
-) -> torch.Tensor:
-    """
-    Fully vectorized randomized rounding using multinomial_match_groups_torch.
-    
-    This achieves the ideal O(1) multinomial calls across all (group, dimension) pairs
-    using the updated implementation that works around PyTorch's limitations.
-    
-    Args:
-        x_float: [B, D] nonnegative float values to round
-        C: [G, D] target integer sums for each group
-        agg: [G, B] aggregation matrix mapping elements to groups
-        
-    Returns:
-        y: [B, D] integer values with exact group sums matching C
-    """
-    # Step 1: Simple rounding to get initial integer values
-    y_rounded = torch.round(x_float).long()
-    
-    # Step 2: Use multinomial_match_groups_torch to redistribute to exact targets
-    # This redistributes proportional to current values and guarantees exact group sums
-    
-    if agg.is_sparse:
-        # Convert sparse to dense for multinomial_match_groups_torch
-        agg_dense = agg.to_dense()
-    else:
-        agg_dense = agg
-    
-    # multinomial_match_groups_torch redistributes counts to match exact targets
-    y_exact = multinomial_match_groups_torch(
-        X=y_rounded.float(),  # Current integer counts as starting distribution
-        C=C.float(),          # Target group sums
-        A=agg_dense           # Group membership matrix
-    )
-    
-    return y_exact
-
+    # Unpad back to [B, D] (grouped order), then unsort
+    Y_grouped = Y_pad[K_mask, :].view(B, D)
+    Y = torch.empty_like(X_sorted)                       # [B, D]
+    Y = Y_grouped
+    Y_out = torch.empty_like(X)
+    Y_out[order] = Y
+    return Y_out.to(torch.long)
 
 
 class DeconvolutionEnergyScoreLoss(EnergyScoreLoss):
@@ -328,16 +299,19 @@ class DeconvolutionEnergyScoreLoss(EnergyScoreLoss):
 
         # ----- 2) KL/I-projection (IPF) anchored to prior -----
         y_float = rescale(
-            x_pred=x_pred,
+            x=x_pred,
             C=C,
-            agg=agg
-        ) 
+            A=agg
+        )
+
+        # print(y_float.float().var(dim=0))
 
         if return_float:
             return y_float
 
         # ----- 3) exact integerization across G per (B,D) -----
-        y_int = fully_vectorized_randomized_round_to_targets(torch.round(y_float), C.to(torch.int64), agg)
+        y_int = randomized_round_groups_exact(y_float, C, agg)
+        # print(y_int.float().var(dim=0))
         return y_int
 
 

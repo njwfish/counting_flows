@@ -205,7 +205,7 @@ class MultimodalUViT(nn.Module):
     def no_weight_decay(self):
         return {'pos_embed', 'count_embed.count_pos_embed'}
 
-    def forward(self, x_t, t, y=None, noise=None):
+    def forward(self, x_t, t, y=None, noise=None, img=None):
         """
         Forward pass for multimodal inputs.
         
@@ -219,10 +219,14 @@ class MultimodalUViT(nn.Module):
             
         Returns:
             Dict with keys 'img' and 'counts' containing predictions
-        """
+        """ 
         # Extract modalities
-        img_t = x_t['img']  # [B, C, H, W]
-        counts_t = x_t['counts']  # [B, count_dim]
+        if img is not None:
+            img_t = img # [B, C, H, W]
+            counts_t = x_t # [B, count_dim]
+        else:
+            img_t = x_t['img']
+            counts_t = x_t['counts']
         
         B = img_t.shape[0]
         
@@ -286,7 +290,9 @@ class MultimodalUViT(nn.Module):
         # Decode counts
         counts_out = self.count_decoder(count_patches_out)  # [B, count_dim]
         
-        return {
-            'img': img_out,
-            'counts': counts_out
-        }
+        # this returns counts only if img is None
+        if img is not None:
+            return counts_out
+
+        return {'img': img_out, 'counts': counts_out}
+

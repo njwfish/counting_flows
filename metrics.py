@@ -35,43 +35,40 @@ def energy_distance(X: np.ndarray, Y: np.ndarray) -> float:
     """Energy distance between two samples"""
     from scipy.spatial.distance import cdist
     
-    XY_dist = np.mean(cdist(X, Y, 'sqeuclidean'))
-    XX_dist = np.mean(cdist(X, X, 'sqeuclidean'))
-    YY_dist = np.mean(cdist(Y, Y, 'sqeuclidean'))
+    XY_dist = np.mean(cdist(X, Y, 'euclidean'))
+    XX_dist = np.mean(cdist(X, X, 'euclidean'))
+    YY_dist = np.mean(cdist(Y, Y, 'euclidean'))
     
     return float(2 * XY_dist - XX_dist - YY_dist)
 
 
-def wasserstein_distance(X: np.ndarray, Y: np.ndarray) -> float:
+def sliced_wasserstein_distance(X: np.ndarray, Y: np.ndarray, n_projections: int = 100, scale: float = 100.0) -> float:
     """Wasserstein distance (1D per dimension, then averaged)"""
-    distances = []
-    for dim in range(X.shape[1]):
-        x_sorted = np.sort(X[:, dim])
-        y_sorted = np.sort(Y[:, dim])
-        
-        # Resample to same length if needed
-        min_len = min(len(x_sorted), len(y_sorted))
-        x_sorted = x_sorted[:min_len]
-        y_sorted = y_sorted[:min_len]
-        
-        distances.append(np.mean(np.abs(x_sorted - y_sorted)))
-    
-    return float(np.mean(distances))
+
+    projections = np.random.randn(X.shape[1], n_projections)
+    projections = projections / np.linalg.norm(projections, axis=0)
+
+    X = X @ projections / scale
+    Y = Y @ projections / scale
+
+    dist = np.sqrt(np.mean(np.square(np.sort(X, axis=0) - np.sort(Y, axis=0))))
+    return float(dist)
 
 
-def mmd_rbf(X: np.ndarray, Y: np.ndarray) -> float:
+def mmd_rbf(X: np.ndarray, Y: np.ndarray, gamma: float = 1.0, scale: float = 100.) -> float:
     """Maximum Mean Discrepancy with RBF kernel"""
     from scipy.spatial.distance import cdist
-    
-    gamma = 1.0 / X.shape[1]  # Scale by dimensionality
+
+    X = X / scale
+    Y = Y / scale
     
     XX = cdist(X, X, 'sqeuclidean')
     YY = cdist(Y, Y, 'sqeuclidean')
     XY = cdist(X, Y, 'sqeuclidean')
     
-    K_XX = np.exp(-gamma * XX)
-    K_YY = np.exp(-gamma * YY)
-    K_XY = np.exp(-gamma * XY)
+    K_XX = np.exp(- gamma * XX)
+    K_YY = np.exp(- gamma * YY)
+    K_XY = np.exp(- gamma * XY)
     
     mmd_squared = np.mean(K_XX) + np.mean(K_YY) - 2 * np.mean(K_XY)
     return float(max(0, mmd_squared) ** 0.5)
@@ -79,9 +76,10 @@ def mmd_rbf(X: np.ndarray, Y: np.ndarray) -> float:
 
 def covariance_frobenius(X: np.ndarray, Y: np.ndarray) -> float:
     """Frobenius norm of covariance difference"""
+    d = X.shape[1]
     cov_X = np.cov(X.T)
     cov_Y = np.cov(Y.T)
-    return float(np.linalg.norm(cov_X - cov_Y, 'fro'))
+    return float(np.linalg.norm(cov_X - cov_Y, 'fro')) / d**2
 
 
 # Dictionary of all metrics: name -> function
@@ -91,7 +89,7 @@ METRICS_FUNCTIONS: Dict[str, Callable[[np.ndarray, np.ndarray], float]] = {
     'skewness_error': skewness_error,
     'kurtosis_error': kurtosis_error,
     'energy_distance': energy_distance,
-    'wasserstein_distance': wasserstein_distance,
+    'wasserstein_distance': sliced_wasserstein_distance,
     'mmd_rbf': mmd_rbf,
     'covariance_frobenius': covariance_frobenius,
 }
@@ -106,13 +104,9 @@ def compute_comprehensive_metrics(eval_data: Dict[str, Any]) -> Dict[str, float]
     x0_generated = eval_data['x0_generated']
     
     # Check if this is image data - if so, skip statistical metrics
-    if len(x0_target.shape) > 2:  # Image data has shape [N, C, H, W] or [N, H, W]
+    if isinstance(x0_target, dict) or len(x0_target.shape) > 2:  # Image data has shape [N, C, H, W] or [N, H, W]
         logger.info("Detected image data - skipping statistical metrics")
-        return {
-            'data_type': 'image',
-            'n_samples': len(x0_target),
-            'image_shape': list(x0_target.shape[1:])
-        }
+        return None
     
     # Ensure same number of samples
     min_samples = min(len(x0_target), len(x0_generated))
