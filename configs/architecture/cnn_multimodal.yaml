@@ -11,11 +11,11 @@ count_dim: ${dataset.data_dim}
 # Noise parameters
 noise_dim: ${model.noise_dim}
 
-# Architecture parameters
-base_channels: 64
-channel_multipliers: [1, 2, 4, 8, 16]
+# Architecture parameters - more efficient
+base_channels: 48
+channel_multipliers: [1, 2, 4, 8]
 num_res_blocks: 2
-time_embed_dim: 1024
+time_embed_dim: 512
 
 # Training parameters
 dropout: 0.1

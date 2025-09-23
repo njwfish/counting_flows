@@ -1,12 +1,13 @@
 # Multimodal Low-Rank Test Configuration
 defaults:
-  - bridge: multitime
-  - model: energy_multimodal_deconv
+  - bridge: skellam
+  - model: energy_score_deconv
   - architecture: uvit_multimodal
   - dataset: merfish_deconv
   - training: merfish_deconv
   - averaging: ema
   - optimizer: adam
+  - scheduler: cosine
   - slack_sampler: bessel
   - _self_
 

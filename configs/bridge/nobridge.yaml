@@ -1,0 +1,3 @@
+# CFM Bridge Configuration
+_target_: bridges.torch.nobridge.NoBridge
+ 

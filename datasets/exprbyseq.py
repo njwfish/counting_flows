@@ -11,6 +11,7 @@ import torch
 import numpy as np
 from scipy import sparse
 import pandas as pd
+import pickle as pkl
 
 # make translation table
 table = str.maketrans("ACGTNacgtn", "0123401234")  # dummy digits for mapping
@@ -46,10 +47,14 @@ class ExprBySeq:
         min_value = 0,
         seed = 42,
         train_split = 0.95,
+        hvg_only = True,
     ):
         self.data_dim = 196608
         self.window_size = 196608
         self.target_size = 896
+
+        self.annotations = pr.read_gtf(gtffile)
+        self.genes = self.annotations[self.annotations.Feature == 'gene'].as_df()
 
         self.sd = snap.read(snapfile)
         self.fasta = Fasta(fastafile)
@@ -58,8 +63,7 @@ class ExprBySeq:
         self.chrom_starts = np.hstack(([0], self.chrom_lens.cumsum()[:-1]))
         self.chrom_map = {name: i for i, name in enumerate(self.chrom_names)}
 
-        self.annotations = pr.read_gtf(gtffile)
-        self.genes = self.annotations[self.annotations.Feature == 'gene'].as_df()
+
 
         self.chrom_weights = (self.chrom_lens - self.window_size) / (self.chrom_lens - self.window_size).sum()
 
@@ -82,6 +86,7 @@ class ExprBySeq:
         ok &= (g_start >= self.half_ctx)
         ok &= (g_end   <= (self.chrom_lens[cidx] - self.half_ctx))
 
+
         elig = pd.DataFrame({
             "chrom_idx": cidx[ok],
             "g_start":   g_start[ok],
@@ -94,8 +99,18 @@ class ExprBySeq:
         both = nnz.merge(elig, on=["chrom_idx","g_start","g_end"], how="inner")
 
         self._eligible_cidx  = both["chrom_idx"].to_numpy(np.int64)
+        self._eligible_gene_name = both["gene_name"]
         self._eligible_start = both["g_start"].to_numpy(np.int64)
         self._eligible_end   = both["g_end"].to_numpy(np.int64)
+
+
+        if hvg_only:
+            hvg_gene_names = pkl.load(open("/orcd/data/omarabu/001/njwfish/counting_flows/hvg_gene_names.pkl", "rb"))
+            hvg_idx = self._eligible_gene_name.isin(hvg_gene_names)
+            self._eligible_cidx = self._eligible_cidx[hvg_idx]
+            self._eligible_gene_name = self._eligible_gene_name[hvg_idx]
+            self._eligible_start = self._eligible_start[hvg_idx]
+            self._eligible_end = self._eligible_end[hvg_idx]
         
         # Cache the full sparse matrix reference
         self.fragment_matrix = self.sd.obsm['fragment_single']
@@ -169,7 +184,7 @@ class ExprBySeq:
     def __len__(self):
         return (self.n_cells // self.batch_size) // 10
 
-    def fast_get_overlap_raw(self, cell_idx, window):
+    def fast_get_overlap_raw(self, cell_idx=None, window=None):
         """
         Build coverage for all rows in `cell_idx` over [start, end),
         counting ANY fragment that overlaps the window. Duplicates preserved.
@@ -177,6 +192,9 @@ class ExprBySeq:
         Overlap condition for left-extending runs (val <= 0, interval [col+val, col)):
             max(col+val, start) < min(col, end)
         """
+
+        if window is None:
+            window = (0, self.max_nt)
         start, end = window
         length = end - start
         R = len(cell_idx)
@@ -184,8 +202,8 @@ class ExprBySeq:
             return np.zeros((R, max(0, length)), dtype=np.int32)
 
         # Gather rows' entry ranges
-        row_starts = self.indptr[cell_idx]
-        row_ends   = self.indptr[cell_idx + 1]
+        row_starts = self.indptr[cell_idx] if cell_idx is not None else self.indptr
+        row_ends   = self.indptr[cell_idx + 1] if cell_idx is not None else self.indptr[1:]
         nnz_rows   = row_ends - row_starts
         total = int(nnz_rows.sum())
         if total == 0:

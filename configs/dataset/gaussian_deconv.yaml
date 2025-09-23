@@ -22,4 +22,4 @@ min_eigenvalue: 0.1  # minimum eigenvalue to ensure positive definiteness
 # Random seed for reproducibility
 seed: 42
 context_dim: 5
-dirichlet_concentration: 1.0
+uniform_lambda: 1.0

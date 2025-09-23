@@ -218,6 +218,7 @@ class DeconvTrainer(Trainer):
         self,
         condition_on_end_time: bool = False,
         max_batch_size: Optional[int] = None,
+        direct_only: bool = False,
         **kwargs
     ):
         """
@@ -238,6 +239,7 @@ class DeconvTrainer(Trainer):
         )
         self.condition_on_end_time = condition_on_end_time
         self.max_batch_size = max_batch_size
+        self.direct_only = direct_only
 
     def _create_dataloader(self, dataset):
         """Create DataLoader from dataset with custom sparse aggregation collate function"""
@@ -265,7 +267,10 @@ class DeconvTrainer(Trainer):
         A = batch['A']
         
         # Apply bridge to get diffusion samples
-        t, x_t, target = bridge(x_0, x_1)
+        if self.direct_only:
+            t, x_t, target = torch.ones(x_0.shape[0], 1).float().cuda(), x_1.float().cuda(), x_0.float().cuda()
+        else:
+            t, x_t, target = bridge(x_0, x_1)
         
         inputs = {
             "t": t,
@@ -275,10 +280,10 @@ class DeconvTrainer(Trainer):
         # target = batch['X_0'] - A @ x_t if bridge.delta else batch['X_0']
         if isinstance(x_0, dict):
             target = {}
-            target['x_0'] = x_0
-            target['X_0'] = batch['X_0']
+            target['x_0'] = x_0.to(self.device)
+            target['X_0'] = batch['X_0'].to(self.device)
         else:
-            target = batch['X_0']
+            target = batch['X_0'].to(self.device)
 
         for key in batch:
             if key != 'x_0' and key != 'x_1' and key != 'A' and key != 'group_sizes' and key != 'X_0':
@@ -311,18 +316,25 @@ class DeconvTrainer(Trainer):
 
         from tqdm import tqdm
         # e step
-        for batch in tqdm(dataloader):
+        if len(dataloader) > 20:
+            tqdm = tqdm(dataloader)
+        else:
+            tqdm = dataloader
+        for batch in tqdm:
             # extract x_1 in multimodal and single modality cases
-            model.eval()
-            avg_model.eval()
-            with torch.no_grad():
-                x_1, context, sampler_kwargs = deconv_sample_batch(batch, self.device, self.condition_on_end_time)
+            if not self.direct_only:
+                model.eval()
+                avg_model.eval()
+                with torch.no_grad():
+                    x_1, context, sampler_kwargs = deconv_sample_batch(batch, self.device, self.condition_on_end_time)
 
-                # if multidimensional time and we have x_0 we should condition on the start time zero for the observed modalities
-                batch['x_0'] = bridge.sampler(
-                    x_1, context, avg_model.module.to(self.device) if avg_model is not None else model, 
-                    **sampler_kwargs
-                )
+                    # if multidimensional time and we have x_0 we should condition on the start time zero for the observed modalities
+                    batch['x_0'] = bridge.sampler(
+                        x_1, context, avg_model.module.to(self.device) if avg_model is not None else model, 
+                        **sampler_kwargs
+                    )
+            else:
+                batch['A'] = batch['A'].to(self.device)
 
             # m step
             model.train()

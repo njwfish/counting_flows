@@ -19,5 +19,5 @@ print_every: 1
 save_every: 1
 # output_dir is now passed automatically by main.py
 
-condition_on_end_time: true
+# condition_on_end_time: true
 max_batch_size: 132

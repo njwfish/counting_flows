@@ -1,7 +1,7 @@
 import torch
 from torch.utils.data import Dataset
 from torch.distributions import Dirichlet
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, Optional
 import numpy as np
 from .gaussian_mixture import GaussianMixtureDataset, LowRankGaussianMixtureDataset
 from .mnist import DiffMNIST
@@ -36,8 +36,9 @@ class DeconvolutionGaussianMixtureDataset(Dataset):
         group_size: int = 10,
         latent_dim: int = None,  # For low-rank variant
         k: int = 5,  # Number of mixture components
-        dirichlet_concentration: float = 1.0,  # Concentration parameter for Dirichlet
+        dirichlet_concentration: Optional[float] = None,  # Concentration parameter for Dirichlet
         seed: int = 42,
+        uniform_lambda: float = 0.0,
         **kwargs  # Additional args passed to LowRankGaussianMixtureDataset
     ):
         super().__init__()
@@ -49,6 +50,7 @@ class DeconvolutionGaussianMixtureDataset(Dataset):
         self.group_size = group_size
         self.k = k
         self.dirichlet_concentration = dirichlet_concentration
+        self.uniform_lambda = uniform_lambda
         
         # Use low-rank variant if latent_dim is specified, otherwise use regular variant
         if latent_dim is not None:
@@ -86,9 +88,13 @@ class DeconvolutionGaussianMixtureDataset(Dataset):
             
             # Sample Dirichlet weights for component allocation
             # Shape: [size, k] - each row sums to 1, represents component proportions
-            dirichlet_dist = Dirichlet(self.dirichlet_concentration * self.mixture_dataset.weights_source * self.k)
-            component_weights = dirichlet_dist.sample((self.size,))
-            
+            base_component_weights = self.uniform_lambda * self.mixture_dataset.weights_source + (1 - self.uniform_lambda) * torch.ones(self.k) / self.k
+            if self.dirichlet_concentration is not None:
+                dirichlet_dist = Dirichlet(self.dirichlet_concentration * base_component_weights)
+                component_weights = dirichlet_dist.sample((self.size,))
+            else:
+                component_weights = base_component_weights.expand(self.size, -1)
+                        
             self.component_indices = {}
             for component_id in range(self.k):
                 component_mask = (self.mixture_dataset.x0_components == component_id)

@@ -12,7 +12,7 @@ device: ${device}
 # DataLoader parameters
 batch_size: 1
 shuffle: true
-num_workers: 8
+num_workers: 12
 
 # Logging and checkpointing
 print_every: 1

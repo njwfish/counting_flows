@@ -1,0 +1,33 @@
+defaults:
+  - bridge: nobridge
+  - model: mse
+  - architecture: scformer_mse
+  - dataset: exprbyseq
+  - training: expr
+  - averaging: ema
+  - optimizer: adam
+  - _self_
+
+# Hydra configuration
+hydra:
+  job:
+    chdir: true
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+# Global settings
+device: cuda
+seed: 42
+
+# Experiment settings
+experiment:
+  name: "Sequence-to-Counts"
+  version: "1.0"
+  description: "Count-based flow matching with GPU bridges"
+
+# Logging
+logging:
+  level: INFO
+
+# Plotting (handled automatically by main.py)
+create_plots: true 

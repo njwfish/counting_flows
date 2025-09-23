@@ -70,7 +70,13 @@ class MerfishDeconv:
         X_0 = x_0_count.sum(axis=0)
 
         x_1_count = torch.round(torch.abs(torch.normal(mean=0, std=10, size=x_0_count.shape))).long()
-        x_1_img = torch.randn_like(self.dapi[group_idxs])
+
+        return {
+            "x_0": x_0_count,
+            "x_1": x_1_count,
+            "img": x_0_img,
+            "X_0": X_0
+        }
 
         return {
             "x_0": {
