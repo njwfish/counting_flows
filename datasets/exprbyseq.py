@@ -13,15 +13,26 @@ from scipy import sparse
 import pandas as pd
 import pickle as pkl
 
-# make translation table
-table = str.maketrans("ACGTNacgtn", "0123401234")  # dummy digits for mapping
+def _build_dna_lut():
+    lut = np.full(256, 4, dtype=np.uint8)  # default -> 'N' (4)
+    # canonical
+    lut[ord('A')] = 0; lut[ord('a')] = 0
+    lut[ord('C')] = 1; lut[ord('c')] = 1
+    lut[ord('G')] = 2; lut[ord('g')] = 2
+    # treat U as T
+    lut[ord('T')] = 3; lut[ord('t')] = 3
+    lut[ord('U')] = 3; lut[ord('u')] = 3
+    # N stays 4
+    lut[ord('N')] = 4; lut[ord('n')] = 4
+    # (All other IUPAC ambiguity codes R,Y,S,W,K,M,B,D,H,V, gaps, etc. remain 4)
+    return lut
 
-def seq_to_tensor(seq: str) -> torch.Tensor:
-    # translate to digits string, then view as bytes
-    digits = seq.translate(table).encode("ascii")
-    arr = np.frombuffer(digits, dtype=np.uint8) - ord('0')
-    return arr.astype(int)
+_DNA_LUT = _build_dna_lut()
 
+def seq_to_tensor(seq: str) -> np.ndarray:
+    """Map sequence to 0:A,1:C,2:G,3:T/U,4:other. Always returns values in [0..4]."""
+    arr = np.frombuffer(seq.encode('ascii', 'ignore'), dtype=np.uint8)
+    return _DNA_LUT[arr].astype(np.int64, copy=False)
 
 class ExprBySeq:
     """
@@ -105,7 +116,7 @@ class ExprBySeq:
 
 
         if hvg_only:
-            hvg_gene_names = pkl.load(open("/orcd/data/omarabu/001/njwfish/counting_flows/hvg_gene_names.pkl", "rb"))
+            hvg_gene_names = pkl.load(open("/orcd/data/omarabu/001/njwfish/counting_flows/results/expr/hvg_gene_names.pkl", "rb"))
             hvg_idx = self._eligible_gene_name.isin(hvg_gene_names)
             self._eligible_cidx = self._eligible_cidx[hvg_idx]
             self._eligible_gene_name = self._eligible_gene_name[hvg_idx]

@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 
+from .proj import rescale, randomized_round_groups_exact
+
 class EnergyScoreLoss(nn.Module):
     """
     Distributional-diffusion energy score loss (eq.14) with m-sample approximation.
@@ -12,12 +14,14 @@ class EnergyScoreLoss(nn.Module):
         noise_dim: int = 16,
         m_samples: int = 16,
         lambda_energy: float = 1.0,
+        use_arch_projection: bool = True,
     ):
         super().__init__()
         self.architecture = architecture
         self.noise_dim = noise_dim
         self.m = m_samples
         self.lambda_energy = lambda_energy
+        self.use_arch_projection = use_arch_projection
 
     def _pairwise_dist(self, a, b, eps=1e-6):
         """
@@ -119,5 +123,66 @@ class EnergyScoreLoss(nn.Module):
         """
         Sample prediction using arbitrary kwargs inputs.
         """
-        prediction = self.forward(kwargs)
-        return prediction.round().long()
+        if 'target_sum' in kwargs:
+            S = kwargs['target_sum']
+            del kwargs['target_sum']
+            return self.conditional_sample(kwargs, S)
+        else:
+            prediction = self.forward(kwargs)
+            return prediction.round().long()
+
+    @torch.no_grad()
+    def conditional_sample(
+        self,
+        inputs: dict,              # tensors shaped [B*G, ...]; no 'noise' key required
+        target_sum: torch.Tensor,  # [B, D] aggregates across G (per batch item)
+        return_float: bool = False # if True: return non-integer y with exact columns
+    ):
+        """
+        Allocation-based conditional sampler (no latent optimization):
+        1) Sample prior counts x_pred from the model (with fresh noise).
+        2) KL/I-projection (IPF) onto {sum_g y = target_sum} (and row totals if keep_rows=True).
+        3) Exact integerization across G per (B,D).
+
+        • Multiplicative/IPF updates ⇒ small deltas when targets are close (anchored to x_pred).
+        • keep_rows=True preserves each individual's total mass from x_pred (strong anchoring).
+        """
+
+        # ----- shapes -----
+        base = next(iter(inputs.values()))
+        agg = inputs['A']
+        device = base.device
+        BG = base.shape[0]
+        B, D = target_sum.shape
+        E = self.noise_dim
+
+        # ----- 1) sample prior x_pred from architecture with noise -----
+        flat_inputs = {k: v for k, v in inputs.items()}
+        noise = torch.randn(BG, E, device=device)
+        flat_inputs['noise'] = noise
+        if 'A' in flat_inputs:
+            del flat_inputs['A']
+        if self.use_arch_projection:
+            flat_inputs['target_sum'] = target_sum
+        x_pred = self.architecture(**flat_inputs)          # [B*G, D] (logits or reals)
+
+        # Optional: normalize tiny columns to avoid degenerate zeros with positive targets
+        # (ipf_robust_anchor also smooths)
+        C = target_sum.to(device)
+
+        # ----- 2) KL/I-projection (IPF) anchored to prior -----
+        y_float = rescale(
+            x=x_pred,
+            C=C,
+            A=agg
+        )
+
+        # print(y_float.float().var(dim=0))
+
+        if return_float:
+            return y_float
+
+        # ----- 3) exact integerization across G per (B,D) -----
+        y_int = randomized_round_groups_exact(y_float, C, agg)
+        # print(y_int.float().var(dim=0))
+        return y_int

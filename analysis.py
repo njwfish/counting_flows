@@ -122,7 +122,16 @@ def load_experiment_data(metrics_path: Path) -> Dict[str, Any]:
             'optimizer_type': safe_extract_target(config.get('optimizer', {})) + '=' + str(config.get('optimizer', {}).get('lr', 'unknown')),
             **numeric_metrics   # Include only numeric computed metrics
         }
+
+        if 'group_size' in config['dataset']:
+            experiment_data['group_size'] = config['dataset']['group_size']
         
+        if 'uniform_lambda' in config['dataset']:
+            experiment_data['uniform_lambda'] = config['dataset']['uniform_lambda']
+        
+        if 'dirichlet_concentration' in config['dataset']:
+            experiment_data['dirichlet_concentration'] = config['dataset']['dirichlet_concentration']
+            
         return experiment_data
         
     except Exception as e:

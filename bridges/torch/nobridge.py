@@ -75,7 +75,7 @@ class NoBridge:
         
         # Reverse sampling loop
         t = torch.ones(b, 1, device=x_t.device)
-        x_0_pred = model(x_t=x_t, t=t, **z)
+        x_0_pred = model.sample(x_t=x_t, t=t, **z)
         
             
         if return_trajectory:

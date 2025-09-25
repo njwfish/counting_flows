@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .energy_multimodal import MultimodalEnergyScoreLoss
-from .energy_deconv import rescale, randomized_round_groups_exact
+from .proj import rescale, randomized_round_groups_exact
 
 
 class MultimodalDeconvolutionEnergyScoreLoss(MultimodalEnergyScoreLoss):
