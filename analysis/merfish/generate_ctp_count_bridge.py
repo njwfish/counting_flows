@@ -69,6 +69,10 @@ def main():
 	 pca = PCA(n_components=ref_pca.shape[1])
 	 pca.fit(ref_adata.X)
 	 query_pca = pca.transform(query_adata.X)
+	#  ref_pca = ref_adata.layers['counts']
+	#  query_pca = query_adata.layers['counts']
+
+	 print(ref_pca.shape, query_pca.shape)
 
 	 # Fit NN on reference PCA and prepare neighbor indices once
 	 nn_model = NearestNeighbors(n_neighbors=args.n_neighbors, metric="euclidean")
@@ -94,7 +98,7 @@ def main():
 				 spot_annotations.append(all_preds[j:j + num])
 				 j += num
 			 ctp = compute_ctp(spot_annotations, k)
-			 out_path = os.path.join(args.output_dir, f"S1R1_{k}/count_bridge.csv")
+			 out_path = os.path.join(args.output_dir, f"S1R1_{k}/count_bridge_25.csv")
 			 os.makedirs(os.path.dirname(out_path), exist_ok=True)
 			 pd.DataFrame(ctp).to_csv(out_path)
 			 print(f"Saved CTP matrix {ctp.shape} to {out_path}")
